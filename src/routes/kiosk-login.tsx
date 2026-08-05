@@ -91,12 +91,6 @@ function KioskLoginPage() {
           </button>
         </form>
 
-        <p className="text-center text-xs text-muted-foreground mt-6">
-          スタッフの方は{" "}
-          <a href="/login" className="text-primary underline underline-offset-2">
-            こちら
-          </a>
-        </p>
       </div>
     </div>
   );

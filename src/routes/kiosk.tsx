@@ -53,7 +53,7 @@ function KioskPage() {
   const navigate = useNavigate();
   const [now, setNow] = useState(new Date());
   const [staffList, setStaffList] = useState<StaffMember[]>([]);
-  const [staffTodayLogs, setStaffTodayLogs] = useState<Record<string, { clock_in: string; clock_out: string | null }>>({});
+  const [staffTodayLogs, setStaffTodayLogs] = useState<Record<string, { clock_in: string; clock_out: string | null; break_start: string | null; break_end: string | null }>>({});
   const [selectedStaff, setSelectedStaff] = useState<StaffMember | null>(null);
   const [todayLog, setTodayLog] = useState<AttendanceLog | null>(null);
   const [loading, setLoading] = useState(false);
@@ -61,7 +61,7 @@ function KioskPage() {
 
   useEffect(() => {
     if (user && user.role !== 'kiosk') {
-      navigate({ to: '/' });
+      navigate({ to: '/kiosk-login' });
     }
   }, [user]);
 
@@ -77,13 +77,13 @@ function KioskPage() {
       supabase.from("staff_members").select("id, name, role, hourly_rate")
         .eq("store_id", user.storeId).eq("status", "active")
         .not("role", "in", '("admin","owner","kiosk")').order("name"),
-      supabase.from("attendance_logs").select("staff_id, clock_in, clock_out")
+      supabase.from("attendance_logs").select("staff_id, clock_in, clock_out, break_start, break_end")
         .eq("store_id", user.storeId).eq("date", today),
     ]);
     setStaffList((members || []) as StaffMember[]);
-    const logMap: Record<string, { clock_in: string; clock_out: string | null }> = {};
+    const logMap: Record<string, { clock_in: string; clock_out: string | null; break_start: string | null; break_end: string | null }> = {};
     for (const log of logs || []) {
-      if (log.clock_in) logMap[log.staff_id] = { clock_in: log.clock_in, clock_out: log.clock_out };
+      if (log.clock_in) logMap[log.staff_id] = { clock_in: log.clock_in, clock_out: log.clock_out, break_start: log.break_start, break_end: log.break_end };
     }
     setStaffTodayLogs(logMap);
   };
@@ -133,6 +133,11 @@ function KioskPage() {
 
     } else if (action === "break_start") {
       if (!todayLog) return;
+      // 既に休憩記録がある場合は上書きしない（2回目以降の休憩は記録しない旨を通知）
+      if (todayLog.break_start) {
+        toast.info("本日の休憩は既に記録済みです");
+        return;
+      }
       const { data, error } = await supabase
         .from("attendance_logs")
         .update({ break_start: timeStr })
@@ -208,13 +213,17 @@ function KioskPage() {
               >
                 <div>
                   <p className="text-lg font-bold text-foreground">{staff.name}</p>
-                  {staffTodayLogs[staff.id] && (
-                    <p className="text-xs mt-0.5 font-medium" style={{ color: staffTodayLogs[staff.id].clock_out ? '#9ca3af' : '#16a34a' }}>
-                      {staffTodayLogs[staff.id].clock_out
-                        ? `退勤済 ${staffTodayLogs[staff.id].clock_in} → ${staffTodayLogs[staff.id].clock_out}`
-                        : `出勤中 ${staffTodayLogs[staff.id].clock_in}〜`}
-                    </p>
-                  )}
+                  {staffTodayLogs[staff.id] && (() => {
+                    const l = staffTodayLogs[staff.id];
+                    const isBreaking = l.break_start && !l.break_end && !l.clock_out;
+                    const color = l.clock_out ? '#9ca3af' : isBreaking ? '#f97316' : '#16a34a';
+                    const label = l.clock_out
+                      ? `退勤済 ${l.clock_in} → ${l.clock_out}`
+                      : isBreaking
+                        ? `休憩中 ${l.break_start}〜`
+                        : `出勤中 ${l.clock_in}〜`;
+                    return <p className="text-xs mt-0.5 font-medium" style={{ color }}>{label}</p>;
+                  })()}
                 </div>
                 <ChevronLeft size={20} className="rotate-180 text-muted-foreground" />
               </button>
