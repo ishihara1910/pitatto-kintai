@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { LogIn, LogOut, ChevronLeft, Users, Coffee } from "lucide-react";
 
 export const Route = createFileRoute("/kiosk")({
-  head: () => ({ meta: [{ title: "出退勤 — DishBoard" }] }),
+  head: () => ({ meta: [{ title: "出退勤 — ピタッと勤怠" }] }),
   component: KioskPage,
 });
 
@@ -233,7 +233,7 @@ function KioskPage() {
       <div className="max-w-md mx-auto w-full px-6 pt-8 pb-2 flex items-center justify-between">
         <div>
           <p className="text-xs text-muted-foreground">{user?.storeName}</p>
-          <h1 className="text-base font-bold text-foreground">出退勤打刻</h1>
+          <h1 className="text-base font-bold text-foreground">ピタッと勤怠</h1>
         </div>
         <button
           onClick={logout}

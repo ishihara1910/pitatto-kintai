@@ -4,7 +4,7 @@ import { useAuth } from "@/lib/auth";
 import { Loader2, Tablet } from "lucide-react";
 
 export const Route = createFileRoute("/kiosk-login")({
-  head: () => ({ meta: [{ title: "キオスクログイン — DishBoard" }] }),
+  head: () => ({ meta: [{ title: "ログイン — ピタッと勤怠" }] }),
   component: KioskLoginPage,
 });
 
@@ -48,7 +48,7 @@ function KioskLoginPage() {
             <Tablet className="h-8 w-8 text-primary-foreground" />
           </div>
           <h1 className="text-2xl font-bold tracking-tight">
-            DishBoard <span className="text-primary">キオスク</span>
+            ピタッと<span className="text-primary">勤怠</span>
           </h1>
         </div>
 
