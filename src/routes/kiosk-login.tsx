@@ -50,7 +50,6 @@ function KioskLoginPage() {
           <h1 className="text-2xl font-bold tracking-tight">
             DishBoard <span className="text-primary">キオスク</span>
           </h1>
-          <p className="text-sm text-muted-foreground mt-1">出退勤打刻専用端末</p>
         </div>
 
         <form onSubmit={onSubmit} className="space-y-4 bg-surface rounded-3xl shadow-card p-6 border border-border">
