@@ -150,8 +150,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
       if (sessionError) throw new Error("セッション設定に失敗しました");
     }
-
-    window.location.href = "/dashboard";
+    // リダイレクトは各ページのuseEffectに任せる
   };
 
   const logout = async () => {
@@ -159,7 +158,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await supabase.auth.signOut();
     setUser(null);
     setLoading(false);
-    window.location.href = "/login";
+    window.location.href = "/kiosk-login";
   };
 
   return (
