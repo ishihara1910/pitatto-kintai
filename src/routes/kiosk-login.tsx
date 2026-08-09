@@ -8,6 +8,8 @@ export const Route = createFileRoute("/kiosk-login")({
   component: KioskLoginPage,
 });
 
+const STORAGE_KEY = "kiosk_saved_credentials";
+
 function KioskLoginPage() {
   const { login, logout, user } = useAuth();
   const navigate = useNavigate();
@@ -15,10 +17,26 @@ function KioskLoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [saveCredentials, setSaveCredentials] = useState(false);
 
   useEffect(() => {
     if (user?.role === "kiosk") navigate({ to: "/kiosk" });
   }, [user]);
+
+  // 保存済み認証情報を復元
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        const { loginId: id, password: pw } = JSON.parse(saved);
+        setLoginId(id || "");
+        setPassword(pw || "");
+        setSaveCredentials(true);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -32,6 +50,13 @@ function KioskLoginPage() {
       if (freshUser && freshUser.role !== "kiosk") {
         await logout();
         setError("このアカウントはキオスク専用ではありません。スタッフ用ログイン画面をご利用ください。");
+        return;
+      }
+      // ログイン成功時に保存
+      if (saveCredentials) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ loginId, password }));
+      } else {
+        localStorage.removeItem(STORAGE_KEY);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "ログインできませんでした");
@@ -58,13 +83,13 @@ function KioskLoginPage() {
             <input
               value={loginId}
               onChange={(e) => setLoginId(e.target.value)}
-              placeholder="キオスク用ログインID"
+              placeholder="ログインID"
               autoComplete="username"
               className="w-full bg-muted rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             />
           </div>
           <div>
-            <label className="text-xs font-semibold text-foreground/80 mb-1.5 block">パスワード</label>
+            <label className="text-xs font-semibold text-foreground/80 mb-1.5 block">ログインパスワード</label>
             <input
               type="password"
               value={password}
@@ -74,6 +99,16 @@ function KioskLoginPage() {
               className="w-full bg-muted rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             />
           </div>
+
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={saveCredentials}
+              onChange={(e) => setSaveCredentials(e.target.checked)}
+              className="rounded"
+            />
+            <span className="text-xs text-muted-foreground">IDとパスワードを保存する</span>
+          </label>
 
           {error && (
             <p className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">
@@ -87,7 +122,7 @@ function KioskLoginPage() {
             className="w-full bg-gradient-primary text-primary-foreground rounded-xl py-3.5 font-semibold text-sm shadow-elevated active:scale-[0.98] transition disabled:opacity-60 flex items-center justify-center gap-2"
           >
             {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-            キオスクにログイン
+            ログイン
           </button>
         </form>
 
