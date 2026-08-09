@@ -63,7 +63,7 @@ function KioskPage() {
     if (user && user.role !== 'kiosk') {
       navigate({ to: '/kiosk-login' });
     }
-  }, [user]);
+  }, [user, navigate]);
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
@@ -73,19 +73,23 @@ function KioskPage() {
   const loadStaffAndLogs = async () => {
     if (!user?.storeId) return;
     const today = toDateStr(new Date());
-    const [{ data: members }, { data: logs }] = await Promise.all([
-      supabase.from("staff_members").select("id, name, role, hourly_rate")
-        .eq("store_id", user.storeId).eq("status", "active")
-        .not("role", "in", '("admin","owner","kiosk")').order("name"),
-      supabase.from("attendance_logs").select("staff_id, clock_in, clock_out, break_start, break_end")
-        .eq("store_id", user.storeId).eq("date", today),
-    ]);
-    setStaffList((members || []) as StaffMember[]);
-    const logMap: Record<string, { clock_in: string; clock_out: string | null; break_start: string | null; break_end: string | null }> = {};
-    for (const log of logs || []) {
-      if (log.clock_in) logMap[log.staff_id] = { clock_in: log.clock_in, clock_out: log.clock_out, break_start: log.break_start, break_end: log.break_end };
+    try {
+      const [{ data: members }, { data: logs }] = await Promise.all([
+        supabase.from("staff_members").select("id, name, role, hourly_rate")
+          .eq("store_id", user.storeId).eq("status", "active")
+          .not("role", "in", '("admin","owner","kiosk")').order("name"),
+        supabase.from("attendance_logs").select("staff_id, clock_in, clock_out, break_start, break_end")
+          .eq("store_id", user.storeId).eq("date", today),
+      ]);
+      setStaffList((members || []) as StaffMember[]);
+      const logMap: Record<string, { clock_in: string; clock_out: string | null; break_start: string | null; break_end: string | null }> = {};
+      for (const log of logs || []) {
+        if (log.clock_in) logMap[log.staff_id] = { clock_in: log.clock_in, clock_out: log.clock_out, break_start: log.break_start, break_end: log.break_end };
+      }
+      setStaffTodayLogs(logMap);
+    } catch {
+      toast.error('スタッフ情報の読み込みに失敗しました');
     }
-    setStaffTodayLogs(logMap);
   };
 
   useEffect(() => {
@@ -130,6 +134,11 @@ function KioskPage() {
       if (error) { console.error("出勤insert error:", error); toast.error(`出勤打刻に失敗しました: ${error.message}`); return; }
       toast.success(`${selectedStaff.name}さん ${timeStr} 出勤しました`);
       setTodayLog(data);
+      setTimeout(() => {
+        setSelectedStaff(null);
+        setTodayLog(null);
+        loadStaffAndLogs();
+      }, 3000);
 
     } else if (action === "break_start") {
       if (!todayLog) return;
@@ -148,6 +157,11 @@ function KioskPage() {
       if (error) { toast.error(`休憩打刻に失敗しました: ${error.message}`); return; }
       toast.success(`${selectedStaff.name}さん ${timeStr} 休憩開始`);
       setTodayLog(data);
+      setTimeout(() => {
+        setSelectedStaff(null);
+        setTodayLog(null);
+        loadStaffAndLogs();
+      }, 3000);
 
     } else if (action === "break_end") {
       if (!todayLog) return;
@@ -161,6 +175,11 @@ function KioskPage() {
       if (error) { toast.error(`休憩終了打刻に失敗しました: ${error.message}`); return; }
       toast.success(`${selectedStaff.name}さん ${timeStr} 休憩終了`);
       setTodayLog(data);
+      setTimeout(() => {
+        setSelectedStaff(null);
+        setTodayLog(null);
+        loadStaffAndLogs();
+      }, 3000);
 
     } else {
       if (!todayLog) return;
@@ -175,7 +194,6 @@ function KioskPage() {
       if (error) { console.error("退勤update error:", error); toast.error(`退勤打刻に失敗しました: ${error.message}`); return; }
       toast.success(`${selectedStaff.name}さん ${timeStr} 退勤しました`);
       setTodayLog(data);
-
       setTimeout(() => {
         setSelectedStaff(null);
         setTodayLog(null);
