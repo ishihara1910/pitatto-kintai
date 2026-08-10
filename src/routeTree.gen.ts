@@ -9,44 +9,12 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as ShiftsRouteImport } from './routes/shifts'
-import { Route as SettingsRouteImport } from './routes/settings'
-import { Route as SalaryRouteImport } from './routes/salary'
-import { Route as NotificationsRouteImport } from './routes/notifications'
-import { Route as LoginRouteImport } from './routes/login'
+import { Route as KioskLoginRouteImport } from './routes/kiosk-login'
 import { Route as KioskRouteImport } from './routes/kiosk'
-import { Route as OrderRouteImport } from './routes/order'
-import { Route as ExpensesRouteImport } from './routes/expenses'
-import { Route as DashboardRouteImport } from './routes/dashboard'
-import { Route as ClockRouteImport } from './routes/clock'
-import { Route as CalendarRouteImport } from './routes/calendar'
-import { Route as AiRouteImport } from './routes/ai'
-import { Route as IndexRouteImport } from './routes/index'
-import { Route as StoresStoreIdRouteImport } from './routes/stores.$storeId'
 
-const ShiftsRoute = ShiftsRouteImport.update({
-  id: '/shifts',
-  path: '/shifts',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SettingsRoute = SettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SalaryRoute = SalaryRouteImport.update({
-  id: '/salary',
-  path: '/salary',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const NotificationsRoute = NotificationsRouteImport.update({
-  id: '/notifications',
-  path: '/notifications',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const LoginRoute = LoginRouteImport.update({
-  id: '/login',
-  path: '/login',
+const KioskLoginRoute = KioskLoginRouteImport.update({
+  id: '/kiosk-login',
+  path: '/kiosk-login',
   getParentRoute: () => rootRouteImport,
 } as any)
 const KioskRoute = KioskRouteImport.update({
@@ -54,199 +22,40 @@ const KioskRoute = KioskRouteImport.update({
   path: '/kiosk',
   getParentRoute: () => rootRouteImport,
 } as any)
-const OrderRoute = OrderRouteImport.update({
-  id: '/order',
-  path: '/order',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ExpensesRoute = ExpensesRouteImport.update({
-  id: '/expenses',
-  path: '/expenses',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const DashboardRoute = DashboardRouteImport.update({
-  id: '/dashboard',
-  path: '/dashboard',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ClockRoute = ClockRouteImport.update({
-  id: '/clock',
-  path: '/clock',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const CalendarRoute = CalendarRouteImport.update({
-  id: '/calendar',
-  path: '/calendar',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AiRoute = AiRouteImport.update({
-  id: '/ai',
-  path: '/ai',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const StoresStoreIdRoute = StoresStoreIdRouteImport.update({
-  id: '/stores/$storeId',
-  path: '/stores/$storeId',
-  getParentRoute: () => rootRouteImport,
-} as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof IndexRoute
-  '/ai': typeof AiRoute
-  '/calendar': typeof CalendarRoute
-  '/clock': typeof ClockRoute
-  '/dashboard': typeof DashboardRoute
-  '/expenses': typeof ExpensesRoute
   '/kiosk': typeof KioskRoute
-  '/login': typeof LoginRoute
-  '/notifications': typeof NotificationsRoute
-  '/order': typeof OrderRoute
-  '/salary': typeof SalaryRoute
-  '/settings': typeof SettingsRoute
-  '/shifts': typeof ShiftsRoute
-  '/stores/$storeId': typeof StoresStoreIdRoute
+  '/kiosk-login': typeof KioskLoginRoute
 }
 export interface FileRoutesByTo {
-  '/': typeof IndexRoute
-  '/ai': typeof AiRoute
-  '/calendar': typeof CalendarRoute
-  '/clock': typeof ClockRoute
-  '/dashboard': typeof DashboardRoute
-  '/expenses': typeof ExpensesRoute
   '/kiosk': typeof KioskRoute
-  '/login': typeof LoginRoute
-  '/notifications': typeof NotificationsRoute
-  '/order': typeof OrderRoute
-  '/salary': typeof SalaryRoute
-  '/settings': typeof SettingsRoute
-  '/shifts': typeof ShiftsRoute
-  '/stores/$storeId': typeof StoresStoreIdRoute
+  '/kiosk-login': typeof KioskLoginRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
-  '/': typeof IndexRoute
-  '/ai': typeof AiRoute
-  '/calendar': typeof CalendarRoute
-  '/clock': typeof ClockRoute
-  '/dashboard': typeof DashboardRoute
-  '/expenses': typeof ExpensesRoute
   '/kiosk': typeof KioskRoute
-  '/login': typeof LoginRoute
-  '/notifications': typeof NotificationsRoute
-  '/order': typeof OrderRoute
-  '/salary': typeof SalaryRoute
-  '/settings': typeof SettingsRoute
-  '/shifts': typeof ShiftsRoute
-  '/stores/$storeId': typeof StoresStoreIdRoute
+  '/kiosk-login': typeof KioskLoginRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths:
-    | '/'
-    | '/ai'
-    | '/calendar'
-    | '/clock'
-    | '/dashboard'
-    | '/expenses'
-    | '/kiosk'
-    | '/login'
-    | '/notifications'
-    | '/order'
-    | '/salary'
-    | '/settings'
-    | '/shifts'
-    | '/stores/$storeId'
+  fullPaths: '/kiosk' | '/kiosk-login'
   fileRoutesByTo: FileRoutesByTo
-  to:
-    | '/'
-    | '/ai'
-    | '/calendar'
-    | '/clock'
-    | '/dashboard'
-    | '/expenses'
-    | '/kiosk'
-    | '/login'
-    | '/notifications'
-    | '/order'
-    | '/salary'
-    | '/settings'
-    | '/shifts'
-    | '/stores/$storeId'
-  id:
-    | '__root__'
-    | '/'
-    | '/ai'
-    | '/calendar'
-    | '/clock'
-    | '/dashboard'
-    | '/expenses'
-    | '/kiosk'
-    | '/login'
-    | '/notifications'
-    | '/order'
-    | '/salary'
-    | '/settings'
-    | '/shifts'
-    | '/stores/$storeId'
+  to: '/kiosk' | '/kiosk-login'
+  id: '__root__' | '/kiosk' | '/kiosk-login'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
-  IndexRoute: typeof IndexRoute
-  AiRoute: typeof AiRoute
-  CalendarRoute: typeof CalendarRoute
-  ClockRoute: typeof ClockRoute
-  DashboardRoute: typeof DashboardRoute
-  ExpensesRoute: typeof ExpensesRoute
   KioskRoute: typeof KioskRoute
-  LoginRoute: typeof LoginRoute
-  NotificationsRoute: typeof NotificationsRoute
-  OrderRoute: typeof OrderRoute
-  SalaryRoute: typeof SalaryRoute
-  SettingsRoute: typeof SettingsRoute
-  ShiftsRoute: typeof ShiftsRoute
-  StoresStoreIdRoute: typeof StoresStoreIdRoute
+  KioskLoginRoute: typeof KioskLoginRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/shifts': {
-      id: '/shifts'
-      path: '/shifts'
-      fullPath: '/shifts'
-      preLoaderRoute: typeof ShiftsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/settings': {
-      id: '/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof SettingsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/salary': {
-      id: '/salary'
-      path: '/salary'
-      fullPath: '/salary'
-      preLoaderRoute: typeof SalaryRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/notifications': {
-      id: '/notifications'
-      path: '/notifications'
-      fullPath: '/notifications'
-      preLoaderRoute: typeof NotificationsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/login': {
-      id: '/login'
-      path: '/login'
-      fullPath: '/login'
-      preLoaderRoute: typeof LoginRouteImport
+    '/kiosk-login': {
+      id: '/kiosk-login'
+      path: '/kiosk-login'
+      fullPath: '/kiosk-login'
+      preLoaderRoute: typeof KioskLoginRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/kiosk': {
@@ -256,80 +65,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof KioskRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/expenses': {
-      id: '/expenses'
-      path: '/expenses'
-      fullPath: '/expenses'
-      preLoaderRoute: typeof ExpensesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/order': {
-      id: '/order'
-      path: '/order'
-      fullPath: '/order'
-      preLoaderRoute: typeof OrderRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/dashboard': {
-      id: '/dashboard'
-      path: '/dashboard'
-      fullPath: '/dashboard'
-      preLoaderRoute: typeof DashboardRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/clock': {
-      id: '/clock'
-      path: '/clock'
-      fullPath: '/clock'
-      preLoaderRoute: typeof ClockRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/calendar': {
-      id: '/calendar'
-      path: '/calendar'
-      fullPath: '/calendar'
-      preLoaderRoute: typeof CalendarRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/ai': {
-      id: '/ai'
-      path: '/ai'
-      fullPath: '/ai'
-      preLoaderRoute: typeof AiRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/stores/$storeId': {
-      id: '/stores/$storeId'
-      path: '/stores/$storeId'
-      fullPath: '/stores/$storeId'
-      preLoaderRoute: typeof StoresStoreIdRouteImport
-      parentRoute: typeof rootRouteImport
-    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
-  IndexRoute: IndexRoute,
-  AiRoute: AiRoute,
-  CalendarRoute: CalendarRoute,
-  ClockRoute: ClockRoute,
-  DashboardRoute: DashboardRoute,
-  ExpensesRoute: ExpensesRoute,
   KioskRoute: KioskRoute,
-  LoginRoute: LoginRoute,
-  NotificationsRoute: NotificationsRoute,
-  OrderRoute: OrderRoute,
-  SalaryRoute: SalaryRoute,
-  SettingsRoute: SettingsRoute,
-  ShiftsRoute: ShiftsRoute,
-  StoresStoreIdRoute: StoresStoreIdRoute,
+  KioskLoginRoute: KioskLoginRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
