@@ -3,7 +3,15 @@ import { useState, useEffect } from "react";
 import { useAuth } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { toast } from "sonner";
-import { LogIn, LogOut, ChevronLeft, Users, Coffee } from "lucide-react";
+import { LogIn, LogOut, ChevronLeft, Users, Coffee, ArrowUpDown, GripVertical, Check } from "lucide-react";
+import {
+  DndContext, closestCenter, PointerSensor, TouchSensor, useSensor, useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext, verticalListSortingStrategy, useSortable, arrayMove,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 
 export const Route = createFileRoute("/kiosk")({
   head: () => ({ meta: [{ title: "出退勤 — ピタッと勤怠" }] }),
@@ -15,6 +23,7 @@ interface StaffMember {
   name: string;
   role: string;
   hourly_rate: number;
+  sort_order: number | null;
 }
 
 interface AttendanceLog {
@@ -58,6 +67,8 @@ function KioskPage() {
   const [todayLog, setTodayLog] = useState<AttendanceLog | null>(null);
   const [loading, setLoading] = useState(false);
   const [showStaffList, setShowStaffList] = useState(false);
+  const [reorderMode, setReorderMode] = useState(false);
+  const [savingOrder, setSavingOrder] = useState(false);
 
   useEffect(() => {
     if (user && user.role !== 'kiosk') {
@@ -75,9 +86,11 @@ function KioskPage() {
     const today = toDateStr(new Date());
     try {
       const [{ data: members }, { data: logs }] = await Promise.all([
-        supabase.from("staff_members").select("id, name, role, hourly_rate")
+        supabase.from("staff_members").select("id, name, role, hourly_rate, sort_order")
           .eq("store_id", user.storeId).eq("status", "active")
-          .not("role", "in", '("admin","owner","kiosk")').order("name"),
+          .not("role", "in", '("admin","owner","kiosk")')
+          .order("sort_order", { ascending: true, nullsFirst: false })
+          .order("name"),
         supabase.from("attendance_logs").select("staff_id, clock_in, clock_out, break_start, break_end")
           .eq("store_id", user.storeId).eq("date", today),
       ]);
@@ -95,6 +108,34 @@ function KioskPage() {
   useEffect(() => {
     loadStaffAndLogs();
   }, [user?.storeId]);
+
+  // 長押し(250ms)してからドラッグ開始とする。スクロール操作と誤反応しないようにするため
+  const dragSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { delay: 250, tolerance: 8 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 8 } }),
+  );
+
+  const handleDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = staffList.findIndex(s => s.id === active.id);
+    const newIndex = staffList.findIndex(s => s.id === over.id);
+    if (oldIndex === -1 || newIndex === -1) return;
+    const reordered = arrayMove(staffList, oldIndex, newIndex);
+    setStaffList(reordered);
+    setSavingOrder(true);
+    try {
+      await Promise.all(
+        reordered.map((s, idx) =>
+          supabase.from("staff_members").update({ sort_order: idx + 1 }).eq("id", s.id)
+        )
+      );
+    } catch {
+      toast.error("並び順の保存に失敗しました");
+    } finally {
+      setSavingOrder(false);
+    }
+  };
 
   const selectStaff = async (staff: StaffMember) => {
     setSelectedStaff(staff);
@@ -213,43 +254,77 @@ function KioskPage() {
     return (
       <div className="min-h-screen bg-background">
         <div className="max-w-md mx-auto px-6 py-8">
-          <div className="flex items-center gap-3 mb-8">
+          <div className="flex items-center gap-3 mb-2">
             <button
-              onClick={() => setShowStaffList(false)}
+              onClick={() => (reorderMode ? setReorderMode(false) : setShowStaffList(false))}
               className="p-2 rounded-xl bg-secondary"
             >
               <ChevronLeft size={20} />
             </button>
-            <h1 className="text-xl font-bold">従業員を選択</h1>
-          </div>
-          <div className="space-y-3">
-            {staffList.map(staff => (
+            <h1 className="text-xl font-bold flex-1">{reorderMode ? "並び替え" : "従業員を選択"}</h1>
+            {reorderMode ? (
               <button
-                key={staff.id}
-                onClick={() => selectStaff(staff)}
-                className="w-full bg-white border border-border rounded-2xl p-5 text-left flex items-center justify-between active:scale-[0.98] transition shadow-sm"
+                onClick={() => setReorderMode(false)}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-gradient-primary text-primary-foreground text-sm font-bold"
               >
-                <div>
-                  <p className="text-lg font-bold text-foreground">{staff.name}</p>
-                  {staffTodayLogs[staff.id] && (() => {
-                    const l = staffTodayLogs[staff.id];
-                    const isBreaking = l.break_start && !l.break_end && !l.clock_out;
-                    const color = l.clock_out ? '#9ca3af' : isBreaking ? '#f97316' : '#16a34a';
-                    const label = l.clock_out
-                      ? `退勤済 ${l.clock_in} → ${l.clock_out}`
-                      : isBreaking
-                        ? `休憩中 ${l.break_start}〜`
-                        : `出勤中 ${l.clock_in}〜`;
-                    return <p className="text-xs mt-0.5 font-medium" style={{ color }}>{label}</p>;
-                  })()}
-                </div>
-                <ChevronLeft size={20} className="rotate-180 text-muted-foreground" />
+                <Check size={16} /> 完了
               </button>
-            ))}
-            {staffList.length === 0 && (
-              <p className="text-center text-muted-foreground py-12">従業員が登録されていません</p>
+            ) : (
+              <button
+                onClick={() => setReorderMode(true)}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-secondary text-sm font-medium"
+              >
+                <ArrowUpDown size={16} /> 並び替え
+              </button>
             )}
           </div>
+          {reorderMode && (
+            <p className="text-xs text-muted-foreground mb-6">
+              {savingOrder ? "保存中..." : "カードを長押しすると並び替えられます"}
+            </p>
+          )}
+          {!reorderMode && <div className="mb-6" />}
+
+          {reorderMode ? (
+            <DndContext sensors={dragSensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+              <SortableContext items={staffList.map(s => s.id)} strategy={verticalListSortingStrategy}>
+                <div className="space-y-3">
+                  {staffList.map(staff => (
+                    <SortableStaffCard key={staff.id} staff={staff} />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
+          ) : (
+            <div className="space-y-3">
+              {staffList.map(staff => (
+                <button
+                  key={staff.id}
+                  onClick={() => selectStaff(staff)}
+                  className="w-full bg-white border border-border rounded-2xl p-5 text-left flex items-center justify-between active:scale-[0.98] transition shadow-sm"
+                >
+                  <div>
+                    <p className="text-lg font-bold text-foreground">{staff.name}</p>
+                    {staffTodayLogs[staff.id] && (() => {
+                      const l = staffTodayLogs[staff.id];
+                      const isBreaking = l.break_start && !l.break_end && !l.clock_out;
+                      const color = l.clock_out ? '#9ca3af' : isBreaking ? '#f97316' : '#16a34a';
+                      const label = l.clock_out
+                        ? `退勤済 ${l.clock_in} → ${l.clock_out}`
+                        : isBreaking
+                          ? `休憩中 ${l.break_start}〜`
+                          : `出勤中 ${l.clock_in}〜`;
+                      return <p className="text-xs mt-0.5 font-medium" style={{ color }}>{label}</p>;
+                    })()}
+                  </div>
+                  <ChevronLeft size={20} className="rotate-180 text-muted-foreground" />
+                </button>
+              ))}
+              {staffList.length === 0 && (
+                <p className="text-center text-muted-foreground py-12">従業員が登録されていません</p>
+              )}
+            </div>
+          )}
         </div>
       </div>
     );
@@ -373,6 +448,27 @@ function KioskPage() {
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+function SortableStaffCard({ staff }: { staff: StaffMember }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: staff.id });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.6 : 1,
+  };
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      className="w-full bg-white border border-border rounded-2xl p-5 flex items-center justify-between shadow-sm touch-none select-none"
+    >
+      <p className="text-lg font-bold text-foreground">{staff.name}</p>
+      <GripVertical size={20} className="text-muted-foreground flex-shrink-0" />
     </div>
   );
 }
