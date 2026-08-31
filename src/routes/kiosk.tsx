@@ -43,11 +43,19 @@ function toDateStr(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-function calcCost(clockIn: string, clockOut: string, hourlyRate: number) {
+function calcCost(clockIn: string, clockOut: string, hourlyRate: number, breakStart?: string | null, breakEnd?: string | null) {
   const toMins = (t: string) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
   let startMins = toMins(clockIn);
   let endMins = toMins(clockOut);
   if (endMins <= startMins) endMins += 24 * 60;
+
+  if (breakStart && breakEnd) {
+    const bsMins = toMins(breakStart);
+    let beMins = toMins(breakEnd);
+    if (beMins < bsMins) beMins += 24 * 60;
+    endMins -= Math.max(0, beMins - bsMins);
+  }
+
   const LATE_START = 22 * 60;
   const LATE_END = (24 + 5) * 60;
   let normalMins = Math.max(0, Math.min(endMins, LATE_START) - startMins);
@@ -224,7 +232,7 @@ function KioskPage() {
 
     } else {
       if (!todayLog) return;
-      const cost = calcCost(todayLog.clock_in!, timeStr, selectedStaff.hourly_rate);
+      const cost = calcCost(todayLog.clock_in!, timeStr, selectedStaff.hourly_rate, todayLog.break_start, todayLog.break_end);
       const { data, error } = await supabase
         .from("attendance_logs")
         .update({ clock_out: timeStr, actual_cost: cost })
