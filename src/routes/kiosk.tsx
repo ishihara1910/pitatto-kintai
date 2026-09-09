@@ -39,26 +39,38 @@ function toDateStr(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+// 残業（1日8時間超、+25%）・深夜（22-翌5時、+25%）の割増賃金（重複部分は+50%）。
+// 雇用形態を問わずすべての時給制スタッフに労働基準法上適用されるためロールによる区別はしない。
 function calcCost(clockIn: string, clockOut: string, hourlyRate: number, breakStart?: string | null, breakEnd?: string | null) {
   const toMins = (t: string) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
-  let startMins = toMins(clockIn);
+  const startMins = toMins(clockIn);
   let endMins = toMins(clockOut);
   if (endMins <= startMins) endMins += 24 * 60;
 
+  let breakMins = 0;
   if (breakStart && breakEnd) {
     const bsMins = toMins(breakStart);
     let beMins = toMins(breakEnd);
     if (beMins < bsMins) beMins += 24 * 60;
-    endMins -= Math.max(0, beMins - bsMins);
+    breakMins = Math.max(0, beMins - bsMins);
+  }
+  const workMins = endMins - startMins - breakMins;
+
+  const OVERTIME_THRESHOLD = 8 * 60;
+  const LATE_START = 22 * 60;
+
+  let effectiveMins = 0;
+  for (let elapsed = 0; elapsed < workMins; elapsed++) {
+    const normalizedMin = (startMins + elapsed) % (24 * 60);
+    const isOvertime = elapsed >= OVERTIME_THRESHOLD;
+    const isLate = normalizedMin >= LATE_START || normalizedMin < 5 * 60;
+    if (isOvertime && isLate) effectiveMins += 1.5;
+    else if (isOvertime) effectiveMins += 1.25;
+    else if (isLate) effectiveMins += 1.25;
+    else effectiveMins += 1.0;
   }
 
-  const LATE_START = 22 * 60;
-  const LATE_END = (24 + 5) * 60;
-  let normalMins = Math.max(0, Math.min(endMins, LATE_START) - startMins);
-  let lateMins = Math.max(0, Math.min(endMins, LATE_END) - Math.max(startMins, LATE_START));
-  let afterMins = Math.max(0, endMins - Math.max(startMins, LATE_END));
-  const effectiveHours = (normalMins + lateMins * 1.25 + afterMins) / 60;
-  return Math.round(effectiveHours * hourlyRate);
+  return Math.round((effectiveMins / 60) * hourlyRate);
 }
 
 function KioskPage() {
