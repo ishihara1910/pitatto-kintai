@@ -35,10 +35,6 @@ interface AttendanceLog {
   break_end: string | null;
 }
 
-function toTimeStr(d: Date) {
-  return d.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit", hour12: false });
-}
-
 function toDateStr(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
@@ -160,29 +156,24 @@ function KioskPage() {
     setLoading(false);
   };
 
+  // 打刻時刻は端末側の時計ではなく、record_punch() RPC内のサーバーnow()を正とする
+  // （端末の時計を変更した打刻の偽装を防ぐため。restro-radar-plus側の自己打刻画面と共通の仕組み）
   const punch = async (action: "in" | "out" | "break_start" | "break_end") => {
     if (!selectedStaff || !user) return;
-    const now = new Date();
-    const today = toDateStr(now);
-    const timeStr = toTimeStr(now);
 
     if (action === "in") {
-      const { data, error } = await supabase
-        .from("attendance_logs")
-        .insert({
-          staff_id: selectedStaff.id,
-          staff_name: selectedStaff.name,
-          store_id: user.storeId,
-          hourly_rate: selectedStaff.hourly_rate,
-          date: today,
-          clock_in: timeStr,
-        })
-        .select()
-        .single();
+      const { data, error } = await supabase.rpc("record_punch", {
+        p_staff_id: selectedStaff.id,
+        p_staff_name: selectedStaff.name,
+        p_store_id: user.storeId,
+        p_hourly_rate: selectedStaff.hourly_rate,
+        p_action: "in",
+      });
 
-      if (error) { console.error("出勤insert error:", error); toast.error(`出勤打刻に失敗しました: ${error.message}`); return; }
-      toast.success(`${selectedStaff.name}さん ${timeStr} 出勤しました`);
-      setTodayLog(data);
+      if (error || !data) { console.error("出勤打刻 error:", error); toast.error(`出勤打刻に失敗しました: ${error?.message ?? ""}`); return; }
+      const row = data as unknown as AttendanceLog;
+      toast.success(`${selectedStaff.name}さん ${row.clock_in} 出勤しました`);
+      setTodayLog(row);
       setTimeout(() => {
         setSelectedStaff(null);
         setTodayLog(null);
@@ -196,16 +187,18 @@ function KioskPage() {
         toast.info("本日の休憩は既に記録済みです");
         return;
       }
-      const { data, error } = await supabase
-        .from("attendance_logs")
-        .update({ break_start: timeStr })
-        .eq("id", todayLog.id)
-        .select()
-        .single();
+      const { data, error } = await supabase.rpc("record_punch", {
+        p_staff_id: selectedStaff.id,
+        p_staff_name: selectedStaff.name,
+        p_store_id: user.storeId,
+        p_hourly_rate: selectedStaff.hourly_rate,
+        p_action: "break_start",
+      });
 
-      if (error) { toast.error(`休憩打刻に失敗しました: ${error.message}`); return; }
-      toast.success(`${selectedStaff.name}さん ${timeStr} 休憩開始`);
-      setTodayLog(data);
+      if (error || !data) { toast.error(`休憩打刻に失敗しました: ${error?.message ?? ""}`); return; }
+      const row = data as unknown as AttendanceLog;
+      toast.success(`${selectedStaff.name}さん ${row.break_start} 休憩開始`);
+      setTodayLog(row);
       setTimeout(() => {
         setSelectedStaff(null);
         setTodayLog(null);
@@ -214,16 +207,18 @@ function KioskPage() {
 
     } else if (action === "break_end") {
       if (!todayLog) return;
-      const { data, error } = await supabase
-        .from("attendance_logs")
-        .update({ break_end: timeStr })
-        .eq("id", todayLog.id)
-        .select()
-        .single();
+      const { data, error } = await supabase.rpc("record_punch", {
+        p_staff_id: selectedStaff.id,
+        p_staff_name: selectedStaff.name,
+        p_store_id: user.storeId,
+        p_hourly_rate: selectedStaff.hourly_rate,
+        p_action: "break_end",
+      });
 
-      if (error) { toast.error(`休憩終了打刻に失敗しました: ${error.message}`); return; }
-      toast.success(`${selectedStaff.name}さん ${timeStr} 休憩終了`);
-      setTodayLog(data);
+      if (error || !data) { toast.error(`休憩終了打刻に失敗しました: ${error?.message ?? ""}`); return; }
+      const row = data as unknown as AttendanceLog;
+      toast.success(`${selectedStaff.name}さん ${row.break_end} 休憩終了`);
+      setTodayLog(row);
       setTimeout(() => {
         setSelectedStaff(null);
         setTodayLog(null);
@@ -232,17 +227,22 @@ function KioskPage() {
 
     } else {
       if (!todayLog) return;
-      const cost = calcCost(todayLog.clock_in!, timeStr, selectedStaff.hourly_rate, todayLog.break_start, todayLog.break_end);
-      const { data, error } = await supabase
-        .from("attendance_logs")
-        .update({ clock_out: timeStr, actual_cost: cost })
-        .eq("id", todayLog.id)
-        .select()
-        .single();
+      const { data, error } = await supabase.rpc("record_punch", {
+        p_staff_id: selectedStaff.id,
+        p_staff_name: selectedStaff.name,
+        p_store_id: user.storeId,
+        p_hourly_rate: selectedStaff.hourly_rate,
+        p_action: "out",
+      });
 
-      if (error) { console.error("退勤update error:", error); toast.error(`退勤打刻に失敗しました: ${error.message}`); return; }
-      toast.success(`${selectedStaff.name}さん ${timeStr} 退勤しました`);
-      setTodayLog(data);
+      if (error || !data) { console.error("退勤打刻 error:", error); toast.error(`退勤打刻に失敗しました: ${error?.message ?? ""}`); return; }
+      const row = data as unknown as AttendanceLog;
+      if (row.clock_in && row.clock_out) {
+        const cost = calcCost(row.clock_in, row.clock_out, selectedStaff.hourly_rate, row.break_start, row.break_end);
+        await supabase.from("attendance_logs").update({ actual_cost: cost }).eq("id", row.id);
+      }
+      toast.success(`${selectedStaff.name}さん ${row.clock_out} 退勤しました`);
+      setTodayLog(row);
       setTimeout(() => {
         setSelectedStaff(null);
         setTodayLog(null);
