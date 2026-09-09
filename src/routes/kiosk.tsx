@@ -28,6 +28,7 @@ interface StaffMember {
 
 interface AttendanceLog {
   id: string;
+  date?: string;
   clock_in: string | null;
   clock_out: string | null;
   actual_cost: number | null;
@@ -39,31 +40,50 @@ function toDateStr(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+function timeToMins(t: string): number {
+  const [h, m] = t.split(":").map(Number);
+  return h * 60 + m;
+}
+
+function breakMinsBetween(breakStart?: string | null, breakEnd?: string | null): number {
+  if (!breakStart || !breakEnd) return 0;
+  const bsMins = timeToMins(breakStart);
+  let beMins = timeToMins(breakEnd);
+  if (beMins < bsMins) beMins += 24 * 60;
+  return Math.max(0, beMins - bsMins);
+}
+
 // 残業（1日8時間超、+25%）・深夜（22-翌5時、+25%）の割増賃金（重複部分は+50%）。
 // 雇用形態を問わずすべての時給制スタッフに労働基準法上適用されるためロールによる区別はしない。
-function calcCost(clockIn: string, clockOut: string, hourlyRate: number, breakStart?: string | null, breakEnd?: string | null) {
-  const toMins = (t: string) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
-  const startMins = toMins(clockIn);
-  let endMins = toMins(clockOut);
+// priorWeeklyNormalMinutes: 同じ週（日曜起算）のこの日より前の日の「日8時間以内」時間の合計（分）。
+// 積み上げが週40時間を超えた分も同様に残業として扱う（省略時は週次判定なし＝従来の日次のみ）
+function calcCost(clockIn: string, clockOut: string, hourlyRate: number, breakStart?: string | null, breakEnd?: string | null, priorWeeklyNormalMinutes: number = 0) {
+  const startMins = timeToMins(clockIn);
+  let endMins = timeToMins(clockOut);
   if (endMins <= startMins) endMins += 24 * 60;
 
-  let breakMins = 0;
-  if (breakStart && breakEnd) {
-    const bsMins = toMins(breakStart);
-    let beMins = toMins(breakEnd);
-    if (beMins < bsMins) beMins += 24 * 60;
-    breakMins = Math.max(0, beMins - bsMins);
-  }
+  const breakMins = breakMinsBetween(breakStart, breakEnd);
   const workMins = endMins - startMins - breakMins;
 
-  const OVERTIME_THRESHOLD = 8 * 60;
+  const DAILY_OT_THRESHOLD = 8 * 60;
+  const WEEKLY_OT_THRESHOLD = 40 * 60;
   const LATE_START = 22 * 60;
 
   let effectiveMins = 0;
+  let weeklyAccum = priorWeeklyNormalMinutes;
   for (let elapsed = 0; elapsed < workMins; elapsed++) {
     const normalizedMin = (startMins + elapsed) % (24 * 60);
-    const isOvertime = elapsed >= OVERTIME_THRESHOLD;
     const isLate = normalizedMin >= LATE_START || normalizedMin < 5 * 60;
+    const isDailyOvertime = elapsed >= DAILY_OT_THRESHOLD;
+
+    let isOvertime: boolean;
+    if (isDailyOvertime) {
+      isOvertime = true;
+    } else {
+      weeklyAccum += 1;
+      isOvertime = weeklyAccum > WEEKLY_OT_THRESHOLD;
+    }
+
     if (isOvertime && isLate) effectiveMins += 1.5;
     else if (isOvertime) effectiveMins += 1.25;
     else if (isLate) effectiveMins += 1.25;
@@ -71,6 +91,22 @@ function calcCost(clockIn: string, clockOut: string, hourlyRate: number, breakSt
   }
 
   return Math.round((effectiveMins / 60) * hourlyRate);
+}
+
+// 日8時間以内の「通常」扱い分の実働時間（分）。週40時間判定の積み上げに使う
+function dailyNormalMinutes(clockIn: string, clockOut: string, breakStart?: string | null, breakEnd?: string | null): number {
+  const startMins = timeToMins(clockIn);
+  let endMins = timeToMins(clockOut);
+  if (endMins <= startMins) endMins += 24 * 60;
+  const workMins = Math.max(0, endMins - startMins - breakMinsBetween(breakStart, breakEnd));
+  return Math.min(workMins, 8 * 60);
+}
+
+// dateを含む週（日曜起算）の日曜日の日付文字列（YYYY-MM-DD）を返す
+function sundayOfWeek(dateStr: string): string {
+  const d = new Date(`${dateStr}T00:00:00`);
+  d.setDate(d.getDate() - d.getDay());
+  return toDateStr(d);
 }
 
 function KioskPage() {
@@ -249,8 +285,16 @@ function KioskPage() {
 
       if (error || !data) { console.error("退勤打刻 error:", error); toast.error(`退勤打刻に失敗しました: ${error?.message ?? ""}`); return; }
       const row = data as unknown as AttendanceLog;
-      if (row.clock_in && row.clock_out) {
-        const cost = calcCost(row.clock_in, row.clock_out, selectedStaff.hourly_rate, row.break_start, row.break_end);
+      if (row.clock_in && row.clock_out && row.date) {
+        const sunday = sundayOfWeek(row.date);
+        const { data: weekRows } = await supabase.from("attendance_logs")
+          .select("date, clock_in, clock_out, break_start, break_end, is_legal_holiday")
+          .eq("staff_id", selectedStaff.id)
+          .gte("date", sunday).lt("date", row.date);
+        const priorWeeklyMins = (weekRows ?? [])
+          .filter((r: any) => !r.is_legal_holiday && r.clock_in && r.clock_out)
+          .reduce((sum: number, r: any) => sum + dailyNormalMinutes(r.clock_in, r.clock_out, r.break_start, r.break_end), 0);
+        const cost = calcCost(row.clock_in, row.clock_out, selectedStaff.hourly_rate, row.break_start, row.break_end, priorWeeklyMins);
         await supabase.from("attendance_logs").update({ actual_cost: cost }).eq("id", row.id);
       }
       toast.success(`${selectedStaff.name}さん ${row.clock_out} 退勤しました`);
