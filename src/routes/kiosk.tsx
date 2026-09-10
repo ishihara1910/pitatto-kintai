@@ -23,6 +23,8 @@ interface StaffMember {
   name: string;
   role: string;
   hourly_rate: number;
+  wage_type: string | null;
+  daily_rate: number | null;
   sort_order: number | null;
 }
 
@@ -57,7 +59,14 @@ function breakMinsBetween(breakStart?: string | null, breakEnd?: string | null):
 // 雇用形態を問わずすべての時給制スタッフに労働基準法上適用されるためロールによる区別はしない。
 // priorWeeklyNormalMinutes: 同じ週（日曜起算）のこの日より前の日の「日8時間以内」時間の合計（分）。
 // 積み上げが週40時間を超えた分も同様に残業として扱う（省略時は週次判定なし＝従来の日次のみ）
-function calcCost(clockIn: string, clockOut: string, hourlyRate: number, breakStart?: string | null, breakEnd?: string | null, priorWeeklyNormalMinutes: number = 0) {
+// 日給制（wageType==='daily'）は出勤した日は実働時間に関わらずdailyRateを固定で計上する
+function calcCost(
+  clockIn: string, clockOut: string, hourlyRate: number,
+  breakStart?: string | null, breakEnd?: string | null, priorWeeklyNormalMinutes: number = 0,
+  wageType?: string | null, dailyRate?: number | null,
+) {
+  if (wageType === "daily") return dailyRate ?? 0;
+
   const startMins = timeToMins(clockIn);
   let endMins = timeToMins(clockOut);
   if (endMins <= startMins) endMins += 24 * 60;
@@ -138,7 +147,7 @@ function KioskPage() {
     const today = toDateStr(new Date());
     try {
       const [{ data: members }, { data: logs }] = await Promise.all([
-        supabase.from("staff_members").select("id, name, role, hourly_rate, sort_order")
+        supabase.from("staff_members").select("id, name, role, hourly_rate, wage_type, daily_rate, sort_order")
           .eq("store_id", user.storeId).eq("status", "active")
           .not("role", "in", '("admin","owner","kiosk")')
           .order("sort_order", { ascending: true, nullsFirst: false })
@@ -294,7 +303,7 @@ function KioskPage() {
         const priorWeeklyMins = (weekRows ?? [])
           .filter((r: any) => !r.is_legal_holiday && r.clock_in && r.clock_out)
           .reduce((sum: number, r: any) => sum + dailyNormalMinutes(r.clock_in, r.clock_out, r.break_start, r.break_end), 0);
-        const cost = calcCost(row.clock_in, row.clock_out, selectedStaff.hourly_rate, row.break_start, row.break_end, priorWeeklyMins);
+        const cost = calcCost(row.clock_in, row.clock_out, selectedStaff.hourly_rate, row.break_start, row.break_end, priorWeeklyMins, selectedStaff.wage_type, selectedStaff.daily_rate);
         await supabase.from("attendance_logs").update({ actual_cost: cost }).eq("id", row.id);
       }
       toast.success(`${selectedStaff.name}さん ${row.clock_out} 退勤しました`);
