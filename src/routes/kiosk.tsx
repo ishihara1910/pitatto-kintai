@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { useAuth } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { toast } from "sonner";
-import { LogIn, LogOut, ChevronLeft, Users, Coffee, ArrowUpDown, GripVertical, Check } from "lucide-react";
+import { LogIn, LogOut, ChevronLeft, Users, Coffee, ArrowUpDown, GripVertical, Check, HeartHandshake, Building2 } from "lucide-react";
 import {
   DndContext, closestCenter, PointerSensor, TouchSensor, useSensor, useSensors,
   type DragEndEvent,
@@ -26,6 +26,11 @@ interface StaffMember {
   wage_type: string | null;
   daily_rate: number | null;
   sort_order: number | null;
+}
+
+interface HelpStore {
+  id: string;
+  name: string;
 }
 
 interface AttendanceLog {
@@ -131,6 +136,15 @@ function KioskPage() {
   const [reorderMode, setReorderMode] = useState(false);
   const [savingOrder, setSavingOrder] = useState(false);
 
+  /* ─ ヘルプ(応援)出勤 ─ */
+  const [showHelpStoreList, setShowHelpStoreList] = useState(false);
+  const [showHelpStaffList, setShowHelpStaffList] = useState(false);
+  const [helpStores, setHelpStores] = useState<HelpStore[]>([]);
+  const [helpStaffList, setHelpStaffList] = useState<StaffMember[]>([]);
+  const [selectedHelpStore, setSelectedHelpStore] = useState<HelpStore | null>(null);
+  const [loadingHelp, setLoadingHelp] = useState(false);
+  const [helpBadge, setHelpBadge] = useState<string | null>(null);
+
   useEffect(() => {
     if (user && user.role !== 'kiosk') {
       navigate({ to: '/kiosk-login' });
@@ -198,9 +212,12 @@ function KioskPage() {
     }
   };
 
-  const selectStaff = async (staff: StaffMember) => {
+  const selectStaff = async (staff: StaffMember, helpStoreName?: string) => {
     setSelectedStaff(staff);
+    setHelpBadge(helpStoreName ?? null);
     setShowStaffList(false);
+    setShowHelpStoreList(false);
+    setShowHelpStaffList(false);
     setLoading(true);
     const today = toDateStr(new Date());
     const { data } = await supabase
@@ -211,6 +228,47 @@ function KioskPage() {
       .maybeSingle();
     setTodayLog(data || null);
     setLoading(false);
+  };
+
+  // ヘルプ(応援)出勤:同じ企業内の他店舗一覧を表示する
+  const openHelpStoreList = async () => {
+    if (!user?.enterpriseId) return;
+    setLoadingHelp(true);
+    setShowHelpStoreList(true);
+    try {
+      const { data } = await supabase
+        .from("stores")
+        .select("id, name")
+        .eq("enterprise_id", user.enterpriseId)
+        .neq("id", user.storeId)
+        .order("name");
+      setHelpStores((data || []) as HelpStore[]);
+    } catch {
+      toast.error("店舗一覧の読み込みに失敗しました");
+    } finally {
+      setLoadingHelp(false);
+    }
+  };
+
+  // ヘルプ(応援)出勤:選択した店舗の従業員一覧を表示する
+  const openHelpStaffList = async (store: HelpStore) => {
+    setSelectedHelpStore(store);
+    setLoadingHelp(true);
+    setShowHelpStaffList(true);
+    try {
+      const { data: members } = await supabase
+        .from("staff_members")
+        .select("id, name, role, hourly_rate, wage_type, daily_rate, sort_order")
+        .eq("store_id", store.id).eq("status", "active")
+        .not("role", "in", '("admin","owner","kiosk")')
+        .order("sort_order", { ascending: true, nullsFirst: false })
+        .order("name");
+      setHelpStaffList((members || []) as StaffMember[]);
+    } catch {
+      toast.error("スタッフ情報の読み込みに失敗しました");
+    } finally {
+      setLoadingHelp(false);
+    }
   };
 
   // 打刻時刻は端末側の時計ではなく、record_punch() RPC内のサーバーnow()を正とする
@@ -234,6 +292,7 @@ function KioskPage() {
       setTimeout(() => {
         setSelectedStaff(null);
         setTodayLog(null);
+        setHelpBadge(null);
         loadStaffAndLogs();
       }, 3000);
 
@@ -259,6 +318,7 @@ function KioskPage() {
       setTimeout(() => {
         setSelectedStaff(null);
         setTodayLog(null);
+        setHelpBadge(null);
         loadStaffAndLogs();
       }, 3000);
 
@@ -279,6 +339,7 @@ function KioskPage() {
       setTimeout(() => {
         setSelectedStaff(null);
         setTodayLog(null);
+        setHelpBadge(null);
         loadStaffAndLogs();
       }, 3000);
 
@@ -311,6 +372,7 @@ function KioskPage() {
       setTimeout(() => {
         setSelectedStaff(null);
         setTodayLog(null);
+        setHelpBadge(null);
         loadStaffAndLogs();
       }, 3000);
     }
@@ -322,6 +384,83 @@ function KioskPage() {
   const isOnBreak = todayLog?.clock_in && todayLog?.break_start && !todayLog?.break_end && !todayLog?.clock_out;
   const isWorking = todayLog?.clock_in && !todayLog?.clock_out && !isOnBreak;
   const isDone = todayLog?.clock_in && todayLog?.clock_out;
+
+  if (showHelpStoreList) {
+    return (
+      <div className="min-h-screen bg-background">
+        <div className="max-w-md mx-auto px-6 py-8">
+          <div className="flex items-center gap-3 mb-6">
+            <button
+              onClick={() => setShowHelpStoreList(false)}
+              className="p-2 rounded-xl bg-secondary"
+            >
+              <ChevronLeft size={20} />
+            </button>
+            <h1 className="text-xl font-bold flex-1">ヘルプ：店舗を選択</h1>
+          </div>
+          {loadingHelp ? (
+            <div className="text-center py-12 text-muted-foreground">読み込み中...</div>
+          ) : (
+            <div className="space-y-3">
+              {helpStores.map(store => (
+                <button
+                  key={store.id}
+                  onClick={() => openHelpStaffList(store)}
+                  className="w-full bg-white border border-border rounded-2xl p-5 text-left flex items-center justify-between active:scale-[0.98] transition shadow-sm"
+                >
+                  <div className="flex items-center gap-3">
+                    <Building2 size={20} className="text-orange-500" />
+                    <p className="text-lg font-bold text-foreground">{store.name}</p>
+                  </div>
+                  <ChevronLeft size={20} className="rotate-180 text-muted-foreground" />
+                </button>
+              ))}
+              {helpStores.length === 0 && (
+                <p className="text-center text-muted-foreground py-12">ヘルプ可能な他店舗がありません</p>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (showHelpStaffList) {
+    return (
+      <div className="min-h-screen bg-background">
+        <div className="max-w-md mx-auto px-6 py-8">
+          <div className="flex items-center gap-3 mb-6">
+            <button
+              onClick={() => { setShowHelpStaffList(false); setShowHelpStoreList(true); }}
+              className="p-2 rounded-xl bg-secondary"
+            >
+              <ChevronLeft size={20} />
+            </button>
+            <h1 className="text-xl font-bold flex-1">ヘルプ：{selectedHelpStore?.name}</h1>
+          </div>
+          {loadingHelp ? (
+            <div className="text-center py-12 text-muted-foreground">読み込み中...</div>
+          ) : (
+            <div className="space-y-3">
+              {helpStaffList.map(staff => (
+                <button
+                  key={staff.id}
+                  onClick={() => selectStaff(staff, selectedHelpStore?.name)}
+                  className="w-full bg-white border border-border rounded-2xl p-5 text-left flex items-center justify-between active:scale-[0.98] transition shadow-sm"
+                >
+                  <p className="text-lg font-bold text-foreground">{staff.name}</p>
+                  <ChevronLeft size={20} className="rotate-180 text-muted-foreground" />
+                </button>
+              ))}
+              {helpStaffList.length === 0 && (
+                <p className="text-center text-muted-foreground py-12">従業員が登録されていません</p>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   if (showStaffList) {
     return (
@@ -425,6 +564,7 @@ function KioskPage() {
           {selectedStaff && (
             <div className="mt-4 px-4 py-2 rounded-full bg-white/20 text-base font-bold inline-block">
               {selectedStaff.name}さん
+              {helpBadge && <span className="ml-1.5 text-sm font-medium opacity-90">(ヘルプ:{helpBadge}より)</span>}
             </div>
           )}
         </section>
@@ -442,6 +582,13 @@ function KioskPage() {
             >
               <Users size={24} />
               従業員を選択する
+            </button>
+            <button
+              onClick={openHelpStoreList}
+              className="w-full bg-white border-2 border-orange-300 text-orange-600 rounded-2xl py-5 font-bold text-base flex items-center justify-center gap-3 active:scale-[0.98] transition"
+            >
+              <HeartHandshake size={22} />
+              ヘルプ（他店舗から応援）
             </button>
           </>
         ) : loading ? (
@@ -470,7 +617,7 @@ function KioskPage() {
               休憩終了
             </button>
             <button
-              onClick={() => { setSelectedStaff(null); setTodayLog(null); }}
+              onClick={() => { setSelectedStaff(null); setTodayLog(null); setHelpBadge(null); }}
               className="w-full bg-secondary text-foreground rounded-2xl py-4 font-medium text-sm"
             >
               戻る
@@ -497,7 +644,7 @@ function KioskPage() {
               休憩開始
             </button>
             <button
-              onClick={() => { setSelectedStaff(null); setTodayLog(null); }}
+              onClick={() => { setSelectedStaff(null); setTodayLog(null); setHelpBadge(null); }}
               className="w-full bg-secondary text-foreground rounded-2xl py-4 font-medium text-sm"
             >
               戻る
@@ -513,7 +660,7 @@ function KioskPage() {
               出勤する
             </button>
             <button
-              onClick={() => { setSelectedStaff(null); setTodayLog(null); }}
+              onClick={() => { setSelectedStaff(null); setTodayLog(null); setHelpBadge(null); }}
               className="w-full bg-secondary text-foreground rounded-2xl py-4 font-medium text-sm"
             >
               戻る
