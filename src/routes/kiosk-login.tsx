@@ -43,11 +43,12 @@ function KioskLoginPage() {
     setError("");
     setLoading(true);
     try {
-      await login(loginId, password);
-      const { user: freshUser } = await new Promise<{ user: typeof user }>((resolve) => {
-        setTimeout(() => resolve({ user }), 100);
-      });
-      if (freshUser && freshUser.role !== "kiosk") {
+      const freshUser = await login(loginId, password);
+      if (!freshUser) {
+        setError("ログインできませんでした");
+        return;
+      }
+      if (freshUser.role !== "kiosk") {
         await logout();
         setError("このアカウントはキオスク専用ではありません。スタッフ用ログイン画面をご利用ください。");
         return;

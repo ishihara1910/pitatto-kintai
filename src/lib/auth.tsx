@@ -17,7 +17,7 @@ export interface User {
 interface AuthContextValue {
   user: User | null;
   loading: boolean;
-  login: (loginId: string, password: string) => Promise<void>;
+  login: (loginId: string, password: string) => Promise<User | null>;
   logout: () => void;
 }
 
@@ -77,7 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     else if (timerRef.current) clearTimeout(timerRef.current);
   }, [user]);
 
-  const fetchUserProfile = async (authUserId: string) => {
+  const fetchUserProfile = async (authUserId: string): Promise<User | null> => {
     let { data: staff } = await supabase
       .from("staff_members")
       .select("id, name, role, store_id, hourly_rate, enterprise_id, auth_user_id")
@@ -104,7 +104,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!staff) {
       setUser(null);
       setLoading(false);
-      return;
+      return null;
     }
 
     let storeName = "";
@@ -120,7 +120,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       kioskEnabled = store?.kiosk_enabled ?? false;
     }
 
-    setUser({
+    const nextUser: User = {
       id: staff.id,
       name: staff.name,
       role: staff.role as Role,
@@ -129,11 +129,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       hourlyWage: staff.hourly_rate ?? 0,
       enterpriseId: staff.enterprise_id ?? "",
       kioskEnabled,
-    });
+    };
+    setUser(nextUser);
     setLoading(false);
+    return nextUser;
   };
 
-  const login = async (loginId: string, password: string) => {
+  const login = async (loginId: string, password: string): Promise<User | null> => {
     const { data, error } = await supabase.functions.invoke("staff-login", {
       body: { login_id: loginId, password },
     });
@@ -149,8 +151,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         refresh_token: data.session.refresh_token,
       });
       if (sessionError) throw new Error("セッション設定に失敗しました");
+      const authUserId = data.session.user?.id;
+      if (authUserId) return fetchUserProfile(authUserId);
     }
     // リダイレクトは各ページのuseEffectに任せる
+    return null;
   };
 
   const logout = async () => {
