@@ -78,18 +78,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [user]);
 
   const fetchUserProfile = async (authUserId: string): Promise<User | null> => {
-    let { data: staff } = await supabase
+    let { data: staff, error: staffError } = await supabase
       .from("staff_members")
       .select("id, name, role, store_id, hourly_rate, enterprise_id, auth_user_id")
       .eq("auth_user_id", authUserId)
       .maybeSingle();
+    if (staffError) console.error("fetchUserProfile (auth_user_id検索) error:", staffError);
 
     if (!staff) {
-      const { data: staffByUserId } = await supabase
+      const { data: staffByUserId, error: staffByUserIdError } = await supabase
         .from("staff_members")
         .select("id, name, role, store_id, hourly_rate, enterprise_id, auth_user_id")
         .eq("user_id", authUserId)
         .maybeSingle();
+      if (staffByUserIdError) console.error("fetchUserProfile (user_id検索) error:", staffByUserIdError);
       staff = staffByUserId;
 
       // auth_user_idが未設定の場合は自動更新
