@@ -144,12 +144,22 @@ function KioskPage() {
   const [selectedHelpStore, setSelectedHelpStore] = useState<HelpStore | null>(null);
   const [loadingHelp, setLoadingHelp] = useState(false);
   const [helpBadge, setHelpBadge] = useState<string | null>(null);
+  const [hasHelpStores, setHasHelpStores] = useState(false);
 
   useEffect(() => {
     if (user && user.role !== 'kiosk') {
       navigate({ to: '/kiosk-login' });
     }
   }, [user, navigate]);
+
+  // チェーン店(同じ企業内に他店舗がある)場合のみヘルプボタンを表示する。単独店舗では出さない
+  useEffect(() => {
+    if (!user?.enterpriseId || !user?.storeId) { setHasHelpStores(false); return; }
+    supabase.from("stores").select("id", { count: "exact", head: true })
+      .eq("enterprise_id", user.enterpriseId)
+      .neq("id", user.storeId)
+      .then(({ count }) => setHasHelpStores((count ?? 0) > 0));
+  }, [user?.enterpriseId, user?.storeId]);
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
@@ -586,13 +596,15 @@ function KioskPage() {
               <Users size={24} />
               従業員を選択する
             </button>
-            <button
-              onClick={openHelpStoreList}
-              className="w-full bg-white border-2 border-orange-300 text-orange-600 rounded-2xl py-5 font-bold text-base flex items-center justify-center gap-3 active:scale-[0.98] transition"
-            >
-              <HeartHandshake size={22} />
-              ヘルプ（他店舗から応援）
-            </button>
+            {hasHelpStores && (
+              <button
+                onClick={openHelpStoreList}
+                className="w-full bg-white border-2 border-orange-300 text-orange-600 rounded-2xl py-5 font-bold text-base flex items-center justify-center gap-3 active:scale-[0.98] transition"
+              >
+                <HeartHandshake size={22} />
+                ヘルプ（他店舗から応援）
+              </button>
+            )}
           </>
         ) : loading ? (
           <div className="text-center py-8 text-muted-foreground">読み込み中...</div>
