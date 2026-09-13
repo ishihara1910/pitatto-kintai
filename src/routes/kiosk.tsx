@@ -254,17 +254,20 @@ function KioskPage() {
   const openHelpStaffList = async (store: HelpStore) => {
     setSelectedHelpStore(store);
     setLoadingHelp(true);
+    setShowHelpStoreList(false);
     setShowHelpStaffList(true);
     try {
-      const { data: members } = await supabase
+      const { data: members, error } = await supabase
         .from("staff_members")
         .select("id, name, role, hourly_rate, wage_type, daily_rate, sort_order")
         .eq("store_id", store.id).eq("status", "active")
         .not("role", "in", '("admin","owner","kiosk")')
         .order("sort_order", { ascending: true, nullsFirst: false })
         .order("name");
+      if (error) console.error("openHelpStaffList error:", error);
       setHelpStaffList((members || []) as StaffMember[]);
-    } catch {
+    } catch (e) {
+      console.error("openHelpStaffList exception:", e);
       toast.error("スタッフ情報の読み込みに失敗しました");
     } finally {
       setLoadingHelp(false);
