@@ -47,6 +47,16 @@ function toDateStr(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+// record_punch()と同じ営業日基準（JST・朝5時区切り）で「今日」を求める。
+// 端末のOSタイムゾーン設定に依存しないよう、UTC基準で+9時間(JST)-5時間(営業日区切り)=+4時間して
+// UTCゲッターで日付を取り出す。深夜0時〜朝5時に出勤した勤務は前日の営業日として記録されるため、
+// この関数を使わずtoDateStr(new Date())のまま「今日」を求めると、その勤務が見つからず
+// キオスク画面が出勤済みの状態を表示できない不具合になる。
+function toBusinessDateStr(d: Date) {
+  const shifted = new Date(d.getTime() + 4 * 60 * 60 * 1000);
+  return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, "0")}-${String(shifted.getUTCDate()).padStart(2, "0")}`;
+}
+
 function timeToMins(t: string): number {
   const [h, m] = t.split(":").map(Number);
   return h * 60 + m;
@@ -168,7 +178,7 @@ function KioskPage() {
 
   const loadStaffAndLogs = async () => {
     if (!user?.storeId) return;
-    const today = toDateStr(new Date());
+    const today = toBusinessDateStr(new Date());
     try {
       const [{ data: members }, { data: logs }] = await Promise.all([
         supabase.from("staff_members").select("id, name, role, hourly_rate, wage_type, daily_rate, sort_order")
@@ -229,7 +239,7 @@ function KioskPage() {
     setShowHelpStoreList(false);
     setShowHelpStaffList(false);
     setLoading(true);
-    const today = toDateStr(new Date());
+    const today = toBusinessDateStr(new Date());
     const { data } = await supabase
       .from("attendance_logs")
       .select("id, clock_in, clock_out, actual_cost, break_start, break_end")
