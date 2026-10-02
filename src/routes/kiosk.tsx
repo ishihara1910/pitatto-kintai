@@ -35,6 +35,7 @@ interface HelpStore {
 
 interface AttendanceLog {
   id: string;
+  store_id?: string;
   date?: string;
   clock_in: string | null;
   clock_out: string | null;
@@ -156,11 +157,46 @@ function KioskPage() {
   const [helpBadge, setHelpBadge] = useState<string | null>(null);
   const [hasHelpStores, setHasHelpStores] = useState(false);
 
+  /* ─ ペア店舗への切替（例: ランチ=岩塚スリーバーグ / ディナー=Latanta岩塚）─
+     ペアが設定された店舗でだけ、控えめな切替ボタンを出す。切替は保存せず、
+     一定時間操作がなければ自動で自店舗に戻す（戻し忘れによる誤打刻を防ぐ） */
+  const [pairStore, setPairStore] = useState<HelpStore | null>(null);
+  const [activeStoreId, setActiveStoreId] = useState<string | null>(null); // null = 自店舗
+  const storeId = activeStoreId ?? user?.storeId ?? null;
+  const switchedToPair = !!activeStoreId && !!pairStore && activeStoreId === pairStore.id;
+  const activeStoreName = switchedToPair ? pairStore!.name : user?.storeName;
+
   useEffect(() => {
     if (user && user.role !== 'kiosk') {
       navigate({ to: '/kiosk-login' });
     }
   }, [user, navigate]);
+
+  useEffect(() => {
+    setPairStore(null);
+    setActiveStoreId(null);
+    if (!user?.storeId || !user?.enterpriseId) return;
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase.from("stores").select("kiosk_pair_store_id").eq("id", user.storeId).maybeSingle();
+      const pairId = (data as any)?.kiosk_pair_store_id as string | null | undefined;
+      if (cancelled || error || !pairId) return;
+      const { data: pair } = await supabase.from("stores").select("id, name, enterprise_id").eq("id", pairId).maybeSingle();
+      // 同じ企業の店舗のみ切替先として扱う
+      if (!cancelled && pair && pair.enterprise_id === user.enterpriseId) setPairStore({ id: pair.id, name: pair.name });
+    })();
+    return () => { cancelled = true; };
+  }, [user?.storeId, user?.enterpriseId]);
+
+  useEffect(() => {
+    if (!activeStoreId) return;
+    const IDLE_MS = 10 * 60 * 1000;
+    let timer = setTimeout(() => setActiveStoreId(null), IDLE_MS);
+    const reset = () => { clearTimeout(timer); timer = setTimeout(() => setActiveStoreId(null), IDLE_MS); };
+    const events = ["pointerdown", "keydown", "touchstart"];
+    events.forEach((e) => window.addEventListener(e, reset));
+    return () => { clearTimeout(timer); events.forEach((e) => window.removeEventListener(e, reset)); };
+  }, [activeStoreId]);
 
   // チェーン店(同じ企業内に他店舗がある)場合のみヘルプボタンを表示する。単独店舗では出さない
   useEffect(() => {
@@ -177,17 +213,17 @@ function KioskPage() {
   }, []);
 
   const loadStaffAndLogs = async () => {
-    if (!user?.storeId) return;
+    if (!storeId) return;
     const today = toBusinessDateStr(new Date());
     try {
       const [{ data: members }, { data: logs }] = await Promise.all([
         supabase.from("staff_members").select("id, name, role, hourly_rate, wage_type, daily_rate, sort_order")
-          .eq("store_id", user.storeId).eq("status", "active")
+          .eq("store_id", storeId).eq("status", "active")
           .not("role", "in", '("admin","owner","kiosk")')
           .order("sort_order", { ascending: true, nullsFirst: false })
           .order("name"),
         supabase.from("attendance_logs").select("staff_id, clock_in, clock_out, break_start, break_end")
-          .eq("store_id", user.storeId).eq("date", today),
+          .eq("store_id", storeId).eq("date", today),
       ]);
       setStaffList((members || []) as StaffMember[]);
       const logMap: Record<string, { clock_in: string; clock_out: string | null; break_start: string | null; break_end: string | null }> = {};
@@ -202,7 +238,7 @@ function KioskPage() {
 
   useEffect(() => {
     loadStaffAndLogs();
-  }, [user?.storeId]);
+  }, [storeId]);
 
   // 長押し(250ms)してからドラッグ開始とする。スクロール操作と誤反応しないようにするため
   const dragSensors = useSensors(
@@ -240,13 +276,19 @@ function KioskPage() {
     setShowHelpStaffList(false);
     setLoading(true);
     const today = toBusinessDateStr(new Date());
+    // 同じ日にランチ(ペア店舗)とディナーの2件がありうるため、複数行を取得して選ぶ。
+    // 出勤中の記録(どの店舗でも)を優先し、無ければ「いま打刻中の店舗」の最新の記録だけを対象にする
+    // （別店舗の退勤済みの記録が、この店舗での新しい出勤を妨げないようにするため）
     const { data } = await supabase
       .from("attendance_logs")
-      .select("id, clock_in, clock_out, actual_cost, break_start, break_end")
+      .select("id, store_id, clock_in, clock_out, actual_cost, break_start, break_end")
       .eq("staff_id", staff.id)
       .eq("date", today)
-      .maybeSingle();
-    setTodayLog(data || null);
+      .order("clock_in", { ascending: true });
+    const rows = (data || []) as AttendanceLog[];
+    const open = rows.find((r) => r.clock_in && !r.clock_out);
+    const inActiveStore = rows.filter((r) => r.store_id === storeId);
+    setTodayLog(open ?? inActiveStore[inActiveStore.length - 1] ?? null);
     setLoading(false);
   };
 
@@ -260,7 +302,7 @@ function KioskPage() {
         .from("stores")
         .select("id, name")
         .eq("enterprise_id", user.enterpriseId)
-        .neq("id", user.storeId)
+        .neq("id", storeId ?? user.storeId)
         .order("name");
       setHelpStores((data || []) as HelpStore[]);
     } catch {
@@ -297,13 +339,13 @@ function KioskPage() {
   // 打刻時刻は端末側の時計ではなく、record_punch() RPC内のサーバーnow()を正とする
   // （端末の時計を変更した打刻の偽装を防ぐため。restro-radar-plus側の自己打刻画面と共通の仕組み）
   const punch = async (action: "in" | "out" | "break_start" | "break_end") => {
-    if (!selectedStaff || !user) return;
+    if (!selectedStaff || !user || !storeId) return;
 
     if (action === "in") {
       const { data, error } = await supabase.rpc("record_punch", {
         p_staff_id: selectedStaff.id,
         p_staff_name: selectedStaff.name,
-        p_store_id: user.storeId,
+        p_store_id: storeId,
         p_hourly_rate: selectedStaff.hourly_rate,
         p_action: "in",
       });
@@ -329,7 +371,7 @@ function KioskPage() {
       const { data, error } = await supabase.rpc("record_punch", {
         p_staff_id: selectedStaff.id,
         p_staff_name: selectedStaff.name,
-        p_store_id: user.storeId,
+        p_store_id: todayLog.store_id ?? storeId,
         p_hourly_rate: selectedStaff.hourly_rate,
         p_action: "break_start",
       });
@@ -350,7 +392,7 @@ function KioskPage() {
       const { data, error } = await supabase.rpc("record_punch", {
         p_staff_id: selectedStaff.id,
         p_staff_name: selectedStaff.name,
-        p_store_id: user.storeId,
+        p_store_id: todayLog.store_id ?? storeId,
         p_hourly_rate: selectedStaff.hourly_rate,
         p_action: "break_end",
       });
@@ -371,7 +413,7 @@ function KioskPage() {
       const { data, error } = await supabase.rpc("record_punch", {
         p_staff_id: selectedStaff.id,
         p_staff_name: selectedStaff.name,
-        p_store_id: user.storeId,
+        p_store_id: todayLog.store_id ?? storeId,
         p_hourly_rate: selectedStaff.hourly_rate,
         p_action: "out",
       });
@@ -569,7 +611,7 @@ function KioskPage() {
     <div className="min-h-screen bg-background flex flex-col">
       <div className="max-w-md mx-auto w-full px-6 pt-8 pb-2 flex items-center justify-between">
         <div>
-          <p className="text-xs text-muted-foreground">{user?.storeName}</p>
+          <p className="text-xs text-muted-foreground">{activeStoreName}</p>
           <h1 className="text-base font-bold text-foreground">ピタッと勤怠</h1>
         </div>
         <button
@@ -579,6 +621,22 @@ function KioskPage() {
           ログアウト
         </button>
       </div>
+
+      {switchedToPair && (
+        <div className="max-w-md mx-auto w-full px-6 mt-2">
+          <div className="flex items-center justify-between gap-3 rounded-2xl bg-orange-100 border border-orange-300 px-4 py-3">
+            <p className="text-sm font-bold text-orange-800">「{activeStoreName}」として打刻中</p>
+            {!selectedStaff && (
+              <button
+                onClick={() => setActiveStoreId(null)}
+                className="text-xs font-bold text-orange-700 px-3 py-1.5 rounded-lg bg-white border border-orange-300"
+              >
+                元に戻す
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="max-w-md mx-auto w-full px-6 mt-4">
         <section className="rounded-3xl bg-gradient-primary text-primary-foreground p-8 text-center shadow-lg">
@@ -613,6 +671,14 @@ function KioskPage() {
               >
                 <HeartHandshake size={22} />
                 ヘルプ（他店舗から応援）
+              </button>
+            )}
+            {pairStore && !switchedToPair && (
+              <button
+                onClick={() => setActiveStoreId(pairStore.id)}
+                className="w-full text-center text-xs text-muted-foreground underline underline-offset-2 py-2"
+              >
+                打刻する店舗を切り替える（{pairStore.name}）
               </button>
             )}
           </>
