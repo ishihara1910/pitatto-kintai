@@ -12,6 +12,7 @@ import {
   SortableContext, verticalListSortingStrategy, useSortable, arrayMove,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { FaceAutoMatch, FaceVerifyScreen, FaceEnrollScreen, callFaceAuth } from "@/components/FaceFlow";
 
 export const Route = createFileRoute("/kiosk")({
   head: () => ({ meta: [{ title: "出退勤 — ピタッと勤怠" }] }),
@@ -166,6 +167,13 @@ function KioskPage() {
   const switchedToPair = !!activeStoreId && !!pairStore && activeStoreId === pairStore.id;
   const activeStoreName = switchedToPair ? pairStore!.name : user?.storeName;
 
+  /* ─ 顔認証(店舗の設定で「顔認証を使う」をONにした店舗だけ) ─ */
+  const [faceEnabled, setFaceEnabled] = useState(false);
+  const [faceRegistered, setFaceRegistered] = useState<Set<string>>(new Set());
+  const [faceGate, setFaceGate] = useState<{ staff: StaffMember; helpStoreName?: string; mode: "verify" | "enroll" } | null>(null);
+  // 顔を確認できないまま進めた打刻(店長の承認待ちとして記録する)
+  const [facePending, setFacePending] = useState(false);
+
   useEffect(() => {
     if (user && user.role !== 'kiosk') {
       navigate({ to: '/kiosk-login' });
@@ -240,6 +248,29 @@ function KioskPage() {
     loadStaffAndLogs();
   }, [storeId]);
 
+  useEffect(() => {
+    setFaceEnabled(false);
+    if (!storeId) return;
+    let cancelled = false;
+    supabase.from("stores").select("face_auth_enabled").eq("id", storeId).maybeSingle()
+      .then(({ data }) => { if (!cancelled) setFaceEnabled(!!(data as any)?.face_auth_enabled); });
+    return () => { cancelled = true; };
+  }, [storeId]);
+
+  // 顔データのある従業員を確認する(顔データそのものは端末に来ない。登録済みかどうかだけ分かる)
+  useEffect(() => {
+    if (!faceEnabled || staffList.length === 0) return;
+    const ids = staffList.map((s) => s.id);
+    callFaceAuth<{ registered: string[] }>({ action: "status", staff_ids: ids })
+      .then((r) => setFaceRegistered((prev) => {
+        const next = new Set(prev);
+        ids.forEach((i) => next.delete(i));
+        r.registered.forEach((i) => next.add(i));
+        return next;
+      }))
+      .catch(() => {});
+  }, [faceEnabled, staffList]);
+
   // 長押し(250ms)してからドラッグ開始とする。スクロール操作と誤反応しないようにするため
   const dragSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { delay: 250, tolerance: 8 } }),
@@ -268,7 +299,27 @@ function KioskPage() {
     }
   };
 
-  const selectStaff = async (staff: StaffMember, helpStoreName?: string) => {
+  // 一覧から選んだとき: 顔認証ONの店舗では、登録済みなら顔の確認、未登録なら登録(撮影)に進む
+  const requestSelect = async (staff: StaffMember, helpStoreName?: string) => {
+    if (!faceEnabled) { selectStaff(staff, helpStoreName); return; }
+    let registered = faceRegistered.has(staff.id);
+    if (!registered) {
+      // ヘルプで他店舗から来た従業員もあるため、登録状況をサーバーで確認してから決める
+      try {
+        const r = await callFaceAuth<{ registered: string[] }>({ action: "status", staff_ids: [staff.id] });
+        registered = r.registered.includes(staff.id);
+      } catch {
+        // 確認できないときは、既存の顔データを上書きしないよう登録には進まず、承認待ちとして打刻を進める
+        toast.info("顔認証を使えないため、店長の承認待ちとして打刻します");
+        selectStaff(staff, helpStoreName, true);
+        return;
+      }
+    }
+    setFaceGate({ staff, helpStoreName, mode: registered ? "verify" : "enroll" });
+  };
+
+  const selectStaff = async (staff: StaffMember, helpStoreName?: string, pending = false) => {
+    setFacePending(pending);
     setSelectedStaff(staff);
     setHelpBadge(helpStoreName ?? null);
     setShowStaffList(false);
@@ -338,6 +389,19 @@ function KioskPage() {
 
   // 打刻時刻は端末側の時計ではなく、record_punch() RPC内のサーバーnow()を正とする
   // （端末の時計を変更した打刻の偽装を防ぐため。restro-radar-plus側の自己打刻画面と共通の仕組み）
+  // 顔を確認できなかった打刻に印を付け、店長・オーナー・管理者へ承認を依頼する(通知はサーバーが送る)
+  const flagFacePending = async (logId: string) => {
+    if (!facePending) return;
+    for (let i = 0; i < 2; i++) {
+      try {
+        await callFaceAuth({ action: "pending", log_id: logId });
+        toast.info("顔を確認できなかったため、店長に承認をお願いしました");
+        return;
+      } catch { /* もう1回試す */ }
+    }
+    toast.error("店長への承認依頼を送れませんでした。店長に直接お知らせください");
+  };
+
   const punch = async (action: "in" | "out" | "break_start" | "break_end") => {
     if (!selectedStaff || !user || !storeId) return;
 
@@ -353,6 +417,7 @@ function KioskPage() {
       if (error || !data) { console.error("出勤打刻 error:", error); toast.error(`出勤打刻に失敗しました: ${error?.message ?? ""}`); return; }
       const row = data as unknown as AttendanceLog;
       toast.success(`${selectedStaff.name}さん ${row.clock_in} 出勤しました`);
+      await flagFacePending(row.id);
       setTodayLog(row);
       setTimeout(() => {
         setSelectedStaff(null);
@@ -379,6 +444,7 @@ function KioskPage() {
       if (error || !data) { toast.error(`休憩打刻に失敗しました: ${error?.message ?? ""}`); return; }
       const row = data as unknown as AttendanceLog;
       toast.success(`${selectedStaff.name}さん ${row.break_start} 休憩開始`);
+      await flagFacePending(row.id);
       setTodayLog(row);
       setTimeout(() => {
         setSelectedStaff(null);
@@ -400,6 +466,7 @@ function KioskPage() {
       if (error || !data) { toast.error(`休憩終了打刻に失敗しました: ${error?.message ?? ""}`); return; }
       const row = data as unknown as AttendanceLog;
       toast.success(`${selectedStaff.name}さん ${row.break_end} 休憩終了`);
+      await flagFacePending(row.id);
       setTodayLog(row);
       setTimeout(() => {
         setSelectedStaff(null);
@@ -433,6 +500,7 @@ function KioskPage() {
         await supabase.from("attendance_logs").update({ actual_cost: cost }).eq("id", row.id);
       }
       toast.success(`${selectedStaff.name}さん ${row.clock_out} 退勤しました`);
+      await flagFacePending(row.id);
       setTodayLog(row);
       setTimeout(() => {
         setSelectedStaff(null);
@@ -449,6 +517,23 @@ function KioskPage() {
   const isOnBreak = todayLog?.clock_in && todayLog?.break_start && !todayLog?.break_end && !todayLog?.clock_out;
   const isWorking = todayLog?.clock_in && !todayLog?.clock_out && !isOnBreak;
   const isDone = todayLog?.clock_in && todayLog?.clock_out;
+
+  if (faceGate) {
+    const g = faceGate;
+    const proceed = (pending: boolean) => { setFaceGate(null); selectStaff(g.staff, g.helpStoreName, pending); };
+    return g.mode === "verify" ? (
+      <FaceVerifyScreen
+        staffName={g.staff.name} staffId={g.staff.id}
+        onSuccess={() => proceed(false)} onPending={() => proceed(true)} onCancel={() => setFaceGate(null)}
+      />
+    ) : (
+      <FaceEnrollScreen
+        staffName={g.staff.name} staffId={g.staff.id}
+        onDone={() => { setFaceRegistered((prev) => new Set(prev).add(g.staff.id)); proceed(false); }}
+        onCancel={() => setFaceGate(null)}
+      />
+    );
+  }
 
   if (showHelpStoreList) {
     return (
@@ -510,7 +595,7 @@ function KioskPage() {
               {helpStaffList.map(staff => (
                 <button
                   key={staff.id}
-                  onClick={() => selectStaff(staff, selectedHelpStore?.name)}
+                  onClick={() => requestSelect(staff, selectedHelpStore?.name)}
                   className="w-full bg-white border border-border rounded-2xl p-5 text-left flex items-center justify-between active:scale-[0.98] transition shadow-sm"
                 >
                   <p className="text-lg font-bold text-foreground">{staff.name}</p>
@@ -577,7 +662,7 @@ function KioskPage() {
               {staffList.map(staff => (
                 <button
                   key={staff.id}
-                  onClick={() => selectStaff(staff)}
+                  onClick={() => requestSelect(staff)}
                   className="w-full bg-white border border-border rounded-2xl p-5 text-left flex items-center justify-between active:scale-[0.98] transition shadow-sm"
                 >
                   <div>
@@ -654,8 +739,15 @@ function KioskPage() {
       <div className="max-w-md mx-auto w-full px-6 mt-6 space-y-3 flex-1">
         {!selectedStaff ? (
           <>
+            {faceEnabled && storeId && (
+              <FaceAutoMatch
+                key={storeId}
+                storeId={storeId}
+                onMatched={(id) => { const s = staffList.find((x) => x.id === id); if (s) selectStaff(s); }}
+              />
+            )}
             <p className="text-center text-muted-foreground text-sm mb-2">
-              従業員を選択して出退勤してください
+              {faceEnabled ? "顔を映すか、従業員を選択して出退勤してください" : "従業員を選択して出退勤してください"}
             </p>
             <button
               onClick={() => setShowStaffList(true)}
