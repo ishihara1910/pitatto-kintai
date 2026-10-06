@@ -9,17 +9,17 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as KioskLoginRouteImport } from './routes/kiosk-login'
 import { Route as KioskRouteImport } from './routes/kiosk'
+import { Route as KioskLoginRouteImport } from './routes/kiosk-login'
 
-const KioskLoginRoute = KioskLoginRouteImport.update({
-  id: '/kiosk-login',
-  path: '/kiosk-login',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const KioskRoute = KioskRouteImport.update({
   id: '/kiosk',
   path: '/kiosk',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const KioskLoginRoute = KioskLoginRouteImport.update({
+  id: '/kiosk-login',
+  path: '/kiosk-login',
   getParentRoute: () => rootRouteImport,
 } as any)
 
@@ -51,18 +51,18 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/kiosk-login': {
-      id: '/kiosk-login'
-      path: '/kiosk-login'
-      fullPath: '/kiosk-login'
-      preLoaderRoute: typeof KioskLoginRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/kiosk': {
       id: '/kiosk'
       path: '/kiosk'
       fullPath: '/kiosk'
       preLoaderRoute: typeof KioskRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/kiosk-login': {
+      id: '/kiosk-login'
+      path: '/kiosk-login'
+      fullPath: '/kiosk-login'
+      preLoaderRoute: typeof KioskLoginRouteImport
       parentRoute: typeof rootRouteImport
     }
   }

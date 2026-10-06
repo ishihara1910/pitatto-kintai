@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Outlet, Link, createRootRouteWithContext, useRouter, useNavigate } from "@tanstack/react-router";
+import { Outlet, Link, createRootRouteWithContext, useRouter, useNavigate, type ErrorComponentProps } from "@tanstack/react-router";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { Loader2 } from "lucide-react";
 import { useEffect } from "react";
@@ -17,13 +17,13 @@ function NotFoundComponent() {
   );
 }
 
-function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
+function ErrorComponent({ error, reset }: ErrorComponentProps) {
   const router = useRouter();
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <div className="max-w-sm text-center">
         <h1 className="text-lg font-semibold text-foreground">読み込みに失敗しました</h1>
-        <p className="mt-2 text-sm text-muted-foreground">{error.message}</p>
+        <p className="mt-2 text-sm text-muted-foreground">{error instanceof Error ? error.message : String(error)}</p>
         <button onClick={() => { router.invalidate(); reset(); }} className="mt-6 rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground">再試行</button>
       </div>
     </div>
