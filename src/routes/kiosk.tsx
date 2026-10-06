@@ -231,12 +231,16 @@ function KioskPage() {
           .order("sort_order", { ascending: true, nullsFirst: false })
           .order("name"),
         supabase.from("attendance_logs").select("staff_id, clock_in, clock_out, break_start, break_end")
-          .eq("store_id", storeId).eq("date", today),
+          .eq("store_id", storeId).eq("date", today).order("clock_in_recorded_at", { ascending: true }),
       ]);
       setStaffList((members || []) as StaffMember[]);
       const logMap: Record<string, { clock_in: string; clock_out: string | null; break_start: string | null; break_end: string | null }> = {};
       for (const log of logs || []) {
-        if (log.clock_in) logMap[log.staff_id] = { clock_in: log.clock_in, clock_out: log.clock_out, break_start: log.break_start, break_end: log.break_end };
+        if (!log.clock_in) continue;
+        const prev = logMap[log.staff_id];
+        // 同じ日に複数の勤務(ランチとディナー等)がある場合は、出勤中の記録を優先し、無ければ最新の記録を表示する
+        if (prev && !prev.clock_out && log.clock_out) continue;
+        logMap[log.staff_id] = { clock_in: log.clock_in, clock_out: log.clock_out, break_start: log.break_start, break_end: log.break_end };
       }
       setStaffTodayLogs(logMap);
     } catch {
@@ -784,7 +788,26 @@ function KioskPage() {
                 {todayLog?.clock_in} → {todayLog?.clock_out}
               </p>
             </div>
-            <p className="text-xs text-muted-foreground">3秒後に戻ります...</p>
+            <p className="text-xs text-muted-foreground mb-4">
+              ランチのあとにディナーも勤務する場合など、続けて勤務する場合は、下のボタンからもう一度出勤を記録できます。
+            </p>
+            <div className="space-y-3">
+              <button
+                onClick={() => {
+                  if (window.confirm("もう一度、出勤を記録します（ランチのあとのディナー勤務など）。よろしいですか？")) punch("in");
+                }}
+                className="w-full bg-gradient-primary text-primary-foreground rounded-2xl py-6 font-bold text-lg flex items-center justify-center gap-3 active:scale-[0.98] transition shadow-lg"
+              >
+                <LogIn size={24} />
+                もう一度出勤する
+              </button>
+              <button
+                onClick={() => { setSelectedStaff(null); setTodayLog(null); setHelpBadge(null); }}
+                className="w-full bg-secondary text-foreground rounded-2xl py-4 font-medium text-sm"
+              >
+                戻る
+              </button>
+            </div>
           </div>
         ) : isOnBreak ? (
           <>
