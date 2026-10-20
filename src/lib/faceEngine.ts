@@ -12,7 +12,8 @@ export function loadFaceEngine(): Promise<FaceApi> {
       const base = "/models/face";
       await Promise.all([
         faceapi.nets.tinyFaceDetector.loadFromUri(base),
-        faceapi.nets.faceLandmark68TinyNet.loadFromUri(base),
+        // 目・鼻・口の位置を測る部品は、精度の高い版を使う(軽量版では、別人との差が出にくかった)
+        faceapi.nets.faceLandmark68Net.loadFromUri(base),
         faceapi.nets.faceRecognitionNet.loadFromUri(base),
       ]);
       return faceapi;
@@ -42,8 +43,8 @@ function inputWidth(input: FaceInput): number {
 /** 画像の中の顔を1つ見つけて特徴量を作る。顔が無い・複数で判別できない場合は null */
 export async function describeFace(input: FaceInput): Promise<DescribedFace | null> {
   const faceapi = await loadFaceEngine();
-  const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
-  const all = await faceapi.detectAllFaces(input, options).withFaceLandmarks(true).withFaceDescriptors();
+  const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.5 });
+  const all = await faceapi.detectAllFaces(input, options).withFaceLandmarks().withFaceDescriptors();
   if (all.length !== 1) return null; // 複数人が映っているときは取り違えを避けるため判定しない
   const det = all[0];
   return {

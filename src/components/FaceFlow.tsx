@@ -106,6 +106,23 @@ function FullScreenCamera({
   );
 }
 
+/** 本人の確認で、1回に送る枚数と、1枚ごとの間隔 */
+const VERIFY_FRAMES = 3;
+const VERIFY_FRAME_GAP_MS = 350;
+
+/** 試験店舗だけで返る、判定の数値(本人との距離・ほかの登録者との距離。小さいほど似ている) */
+interface VerifyDebug { self: (number | null)[]; other: (number | null)[]; threshold: number; passes: number }
+
+/* ─ 基準を決めるための表示(試験店舗だけ。基準が決まったらサーバー側で返さなくなる) ─ */
+function DebugLine({ debug }: { debug: VerifyDebug }) {
+  const f = (n: number | null) => (n == null ? "-" : n.toFixed(2));
+  return (
+    <p className="text-[11px] text-white/70 font-mono">
+      判定値 本人 {debug.self.map(f).join(" / ")}(基準 {debug.threshold.toFixed(2)} 以下）・他の人 {debug.other.map(f).join(" / ")}・合格 {debug.passes}/{debug.self.length}
+    </p>
+  );
+}
+
 /* ─ 打刻の前に、本人の顔か確認する(確認できない回数が3回で、店長の承認待ちとして進められる) ─ */
 export function FaceVerifyScreen({
   staffName, staffId, onSuccess, onPending, onCancel, onTimeout,
@@ -124,6 +141,8 @@ export function FaceVerifyScreen({
   const [attempts, setAttempts] = useState(0);
   const [checking, setChecking] = useState(false);
   const [ok, setOk] = useState(false);
+  // 基準を決めるあいだだけ(試験店舗)、サーバーが返す判定の数値
+  const [debug, setDebug] = useState<VerifyDebug | null>(null);
   const failed = attempts >= MAX_ATTEMPTS || state === "error";
   const onSuccessRef = useRef(onSuccess);
   onSuccessRef.current = onSuccess;
@@ -133,19 +152,27 @@ export function FaceVerifyScreen({
     if (state !== "ready" || attempts >= MAX_ATTEMPTS) return;
     let stopped = false;
     let busy = false;
+    // 1回の確認で、少し間をあけて連続で撮った数枚を送る(サーバーは、そのうち2枚以上が基準内のときだけ合格にする)
+    const frames: number[][] = [];
+    let lastFrame = 0;
     const tick = async () => {
       if (stopped || busy) return;
       const v = videoRef.current;
       if (!v || v.readyState < 2) return;
+      if (Date.now() - lastFrame < VERIFY_FRAME_GAP_MS) return;
       busy = true;
       try {
         const f = await describeFace(v);
-        if (!isUsableFace(f)) return;
+        if (!isUsableFace(f) || stopped) return;
+        lastFrame = Date.now();
+        frames.push(f.descriptor);
         setChecking(true);
-        const r = await callFaceAuth<{ ok: boolean }>({ action: "verify", staff_id: staffId, descriptor: f.descriptor });
+        if (frames.length < VERIFY_FRAMES) return;
+        const r = await callFaceAuth<{ ok: boolean; debug?: VerifyDebug }>({ action: "verify", staff_id: staffId, descriptors: frames.splice(0) });
         if (stopped) return;
         stopped = true;
         setChecking(false);
+        setDebug(r.debug ?? null);
         if (r.ok) {
           setOk(true);
           setTimeout(() => onSuccessRef.current(), 900);   // 「確認しました」を見せてから戻る
@@ -160,7 +187,7 @@ export function FaceVerifyScreen({
         busy = false;
       }
     };
-    const id = setInterval(tick, 700);
+    const id = setInterval(tick, 200);
     return () => { stopped = true; clearInterval(id); };
   }, [state, attempts, staffId, videoRef]);
 
@@ -188,6 +215,7 @@ export function FaceVerifyScreen({
           {attempts > 0 && <p className="text-base font-bold text-orange-300">{attempts}/{MAX_ATTEMPTS} 回</p>}
         </>
       )}
+      {debug && <DebugLine debug={debug} />}
     </FullScreenCamera>
   );
 }
