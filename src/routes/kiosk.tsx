@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { useAuth } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { toast } from "sonner";
-import { LogIn, LogOut, ChevronLeft, Users, Coffee, ArrowUpDown, GripVertical, Check, HeartHandshake, Building2 } from "lucide-react";
+import { LogIn, LogOut, ChevronLeft, Users, Coffee, ArrowUpDown, GripVertical, Check, HeartHandshake, Building2, ScanFace } from "lucide-react";
 import {
   DndContext, closestCenter, PointerSensor, TouchSensor, useSensor, useSensors,
   type DragEndEvent,
@@ -12,7 +12,7 @@ import {
   SortableContext, verticalListSortingStrategy, useSortable, arrayMove,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { FaceAutoMatch, FaceVerifyScreen, FaceEnrollScreen, callFaceAuth } from "@/components/FaceFlow";
+import { FaceVerifyScreen, FaceEnrollScreen, callFaceAuth } from "@/components/FaceFlow";
 
 export const Route = createFileRoute("/kiosk")({
   head: () => ({ meta: [{ title: "出退勤 — ピタッと勤怠" }] }),
@@ -170,9 +170,15 @@ function KioskPage() {
   /* ─ 顔認証(店舗の設定で「顔認証を使う」をONにした店舗だけ) ─ */
   const [faceEnabled, setFaceEnabled] = useState(false);
   const [faceRegistered, setFaceRegistered] = useState<Set<string>>(new Set());
-  const [faceGate, setFaceGate] = useState<{ staff: StaffMember; helpStoreName?: string; mode: "verify" | "enroll" } | null>(null);
-  // 顔を確認できないまま進めた打刻(店長の承認待ちとして記録する)
-  const [facePending, setFacePending] = useState(false);
+  // 選んだ従業員の顔認証の状態。ONの店舗では、ok か pending になるまで打刻のボタンを押せない
+  //  checking=登録状況を確認中 / need-verify=顔認証が必要 / need-enroll=顔の登録が必要
+  //  ok=顔認証できた / pending=顔を確認できないまま進める(店長の承認待ちとして記録する)
+  const [faceStatus, setFaceStatus] = useState<{ staffId: string; status: "checking" | "need-verify" | "need-enroll" | "ok" | "pending" } | null>(null);
+  // 画面いっぱいのカメラ(顔認証・顔の登録)を開いているか
+  const [faceScreen, setFaceScreen] = useState<"verify" | "enroll" | null>(null);
+  const currentFace = faceEnabled && selectedStaff && faceStatus?.staffId === selectedStaff.id ? faceStatus.status : null;
+  const facePending = currentFace === "pending";
+  const canPunch = !faceEnabled || currentFace === "ok" || currentFace === "pending";
 
   useEffect(() => {
     if (user && user.role !== 'kiosk') {
@@ -303,9 +309,18 @@ function KioskPage() {
     }
   };
 
-  // 一覧から選んだとき: 顔認証ONの店舗では、登録済みなら顔の確認、未登録なら登録(撮影)に進む
-  const requestSelect = async (staff: StaffMember, helpStoreName?: string) => {
-    if (!faceEnabled) { selectStaff(staff, helpStoreName); return; }
+  // トップ画面に戻す(選んだ従業員・顔認証の状態をすべて解除する)
+  const resetToTop = () => {
+    setSelectedStaff(null);
+    setTodayLog(null);
+    setHelpBadge(null);
+    setFaceStatus(null);
+    setFaceScreen(null);
+  };
+
+  // 顔認証ONの店舗: 登録済みなら「顔認証をする」、未登録なら「顔を登録する」を出す
+  const checkFaceStatus = async (staff: StaffMember) => {
+    setFaceStatus({ staffId: staff.id, status: "checking" });
     let registered = faceRegistered.has(staff.id);
     if (!registered) {
       // ヘルプで他店舗から来た従業員もあるため、登録状況をサーバーで確認してから決める
@@ -315,15 +330,16 @@ function KioskPage() {
       } catch {
         // 確認できないときは、既存の顔データを上書きしないよう登録には進まず、承認待ちとして打刻を進める
         toast.info("顔認証を使えないため、店長の承認待ちとして打刻します");
-        selectStaff(staff, helpStoreName, true);
+        setFaceStatus({ staffId: staff.id, status: "pending" });
         return;
       }
     }
-    setFaceGate({ staff, helpStoreName, mode: registered ? "verify" : "enroll" });
+    setFaceStatus({ staffId: staff.id, status: registered ? "need-verify" : "need-enroll" });
   };
 
-  const selectStaff = async (staff: StaffMember, helpStoreName?: string, pending = false) => {
-    setFacePending(pending);
+  const selectStaff = async (staff: StaffMember, helpStoreName?: string) => {
+    setFaceScreen(null);
+    if (faceEnabled) checkFaceStatus(staff); else setFaceStatus(null);
     setSelectedStaff(staff);
     setHelpBadge(helpStoreName ?? null);
     setShowStaffList(false);
@@ -408,6 +424,7 @@ function KioskPage() {
 
   const punch = async (action: "in" | "out" | "break_start" | "break_end") => {
     if (!selectedStaff || !user || !storeId) return;
+    if (!canPunch) return;   // 顔認証ONの店舗では、顔認証のあとに打刻する
 
     if (action === "in") {
       const { data, error } = await supabase.rpc("record_punch", {
@@ -424,9 +441,7 @@ function KioskPage() {
       await flagFacePending(row.id);
       setTodayLog(row);
       setTimeout(() => {
-        setSelectedStaff(null);
-        setTodayLog(null);
-        setHelpBadge(null);
+        resetToTop();
         loadStaffAndLogs();
       }, 3000);
 
@@ -451,9 +466,7 @@ function KioskPage() {
       await flagFacePending(row.id);
       setTodayLog(row);
       setTimeout(() => {
-        setSelectedStaff(null);
-        setTodayLog(null);
-        setHelpBadge(null);
+        resetToTop();
         loadStaffAndLogs();
       }, 3000);
 
@@ -473,9 +486,7 @@ function KioskPage() {
       await flagFacePending(row.id);
       setTodayLog(row);
       setTimeout(() => {
-        setSelectedStaff(null);
-        setTodayLog(null);
-        setHelpBadge(null);
+        resetToTop();
         loadStaffAndLogs();
       }, 3000);
 
@@ -507,9 +518,7 @@ function KioskPage() {
       await flagFacePending(row.id);
       setTodayLog(row);
       setTimeout(() => {
-        setSelectedStaff(null);
-        setTodayLog(null);
-        setHelpBadge(null);
+        resetToTop();
         loadStaffAndLogs();
       }, 3000);
     }
@@ -522,19 +531,62 @@ function KioskPage() {
   const isWorking = todayLog?.clock_in && !todayLog?.clock_out && !isOnBreak;
   const isDone = todayLog?.clock_in && todayLog?.clock_out;
 
-  if (faceGate) {
-    const g = faceGate;
-    const proceed = (pending: boolean) => { setFaceGate(null); selectStaff(g.staff, g.helpStoreName, pending); };
-    return g.mode === "verify" ? (
+  // 顔認証のあと、打刻せずに放置されたら、30秒でトップ画面に戻す
+  useEffect(() => {
+    if (!selectedStaff || faceScreen || (currentFace !== "ok" && currentFace !== "pending")) return;
+    const id = setTimeout(resetToTop, 30_000);
+    return () => clearTimeout(id);
+  }, [selectedStaff, currentFace, faceScreen]);
+
+  // 打刻の画面の上に出す、顔認証の欄(顔認証ONの店舗だけ)
+  const facePanel = selectedStaff && !loading && currentFace ? (
+    currentFace === "ok" ? (
+      <div className="bg-green-50 border border-green-300 rounded-2xl p-4 text-center">
+        <p className="text-lg font-bold text-green-700">✅ 顔認証OK</p>
+        <p className="text-xs text-muted-foreground mt-1">下のボタンから打刻してください</p>
+      </div>
+    ) : currentFace === "pending" ? (
+      <div className="bg-orange-50 border border-orange-300 rounded-2xl p-4 text-center">
+        <p className="text-sm font-bold text-orange-800">顔を確認できませんでした</p>
+        <p className="text-xs text-orange-700 mt-1">このまま打刻できます。店長があとで確認します。</p>
+      </div>
+    ) : currentFace === "checking" ? (
+      <div className="text-center py-4 text-muted-foreground text-sm">顔認証の準備をしています…</div>
+    ) : (
+      <div className="space-y-2">
+        <button
+          onClick={() => setFaceScreen(currentFace === "need-enroll" ? "enroll" : "verify")}
+          className="w-full bg-gradient-primary text-primary-foreground rounded-2xl py-6 font-bold text-lg flex items-center justify-center gap-3 active:scale-[0.98] transition shadow-lg ring-4 ring-orange-200"
+        >
+          <ScanFace size={26} />
+          {currentFace === "need-enroll" ? "顔を登録する" : "顔認証をする"}
+        </button>
+        <p className="text-center text-xs text-muted-foreground">
+          {currentFace === "need-enroll" ? "初回だけ、顔の登録が必要です。登録のあとに打刻できます" : "顔認証のあとに、打刻できます"}
+        </p>
+      </div>
+    )
+  ) : null;
+
+  if (faceScreen && selectedStaff) {
+    const staff = selectedStaff;
+    const backToPunch = () => setFaceScreen(null);
+    return faceScreen === "verify" ? (
       <FaceVerifyScreen
-        staffName={g.staff.name} staffId={g.staff.id}
-        onSuccess={() => proceed(false)} onPending={() => proceed(true)} onCancel={() => setFaceGate(null)}
+        staffName={staff.name} staffId={staff.id}
+        onSuccess={() => { setFaceStatus({ staffId: staff.id, status: "ok" }); setFaceScreen(null); }}
+        onPending={() => { setFaceStatus({ staffId: staff.id, status: "pending" }); setFaceScreen(null); }}
+        onCancel={backToPunch} onTimeout={resetToTop}
       />
     ) : (
       <FaceEnrollScreen
-        staffName={g.staff.name} staffId={g.staff.id}
-        onDone={() => { setFaceRegistered((prev) => new Set(prev).add(g.staff.id)); proceed(false); }}
-        onCancel={() => setFaceGate(null)}
+        staffName={staff.name} staffId={staff.id}
+        onDone={() => {
+          setFaceRegistered((prev) => new Set(prev).add(staff.id));
+          setFaceStatus({ staffId: staff.id, status: "ok" });
+          setFaceScreen(null);
+        }}
+        onCancel={backToPunch} onTimeout={resetToTop}
       />
     );
   }
@@ -599,7 +651,7 @@ function KioskPage() {
               {helpStaffList.map(staff => (
                 <button
                   key={staff.id}
-                  onClick={() => requestSelect(staff, selectedHelpStore?.name)}
+                  onClick={() => selectStaff(staff, selectedHelpStore?.name)}
                   className="w-full bg-white border border-border rounded-2xl p-5 text-left flex items-center justify-between active:scale-[0.98] transition shadow-sm"
                 >
                   <p className="text-lg font-bold text-foreground">{staff.name}</p>
@@ -666,7 +718,7 @@ function KioskPage() {
               {staffList.map(staff => (
                 <button
                   key={staff.id}
-                  onClick={() => requestSelect(staff)}
+                  onClick={() => selectStaff(staff)}
                   className="w-full bg-white border border-border rounded-2xl p-5 text-left flex items-center justify-between active:scale-[0.98] transition shadow-sm"
                 >
                   <div>
@@ -741,21 +793,15 @@ function KioskPage() {
       </div>
 
       <div className="max-w-md mx-auto w-full px-6 mt-6 space-y-3 flex-1">
+        {facePanel}
         {!selectedStaff ? (
           <>
-            {faceEnabled && storeId && (
-              <FaceAutoMatch
-                key={storeId}
-                storeId={storeId}
-                onMatched={(id) => { const s = staffList.find((x) => x.id === id); if (s) selectStaff(s); }}
-              />
-            )}
             <p className="text-center text-muted-foreground text-sm mb-2">
-              {faceEnabled ? "顔を映すか、従業員を選択して出退勤してください" : "従業員を選択して出退勤してください"}
+              従業員を選択して出退勤してください
             </p>
             <button
               onClick={() => setShowStaffList(true)}
-              className="w-full bg-gradient-primary text-primary-foreground rounded-2xl py-6 font-bold text-lg flex items-center justify-center gap-3 active:scale-[0.98] transition shadow-lg"
+              className="w-full bg-gradient-primary text-primary-foreground rounded-2xl py-6 font-bold text-lg flex items-center justify-center gap-3 active:scale-[0.98] transition shadow-lg disabled:opacity-35 disabled:shadow-none"
             >
               <Users size={24} />
               従業員を選択する
@@ -796,13 +842,14 @@ function KioskPage() {
                 onClick={() => {
                   if (window.confirm("もう一度、出勤を記録します（ランチのあとのディナー勤務など）。よろしいですか？")) punch("in");
                 }}
-                className="w-full bg-gradient-primary text-primary-foreground rounded-2xl py-6 font-bold text-lg flex items-center justify-center gap-3 active:scale-[0.98] transition shadow-lg"
+                disabled={!canPunch}
+                className="w-full bg-gradient-primary text-primary-foreground rounded-2xl py-6 font-bold text-lg flex items-center justify-center gap-3 active:scale-[0.98] transition shadow-lg disabled:opacity-35 disabled:shadow-none"
               >
                 <LogIn size={24} />
                 もう一度出勤する
               </button>
               <button
-                onClick={() => { setSelectedStaff(null); setTodayLog(null); setHelpBadge(null); }}
+                onClick={resetToTop}
                 className="w-full bg-secondary text-foreground rounded-2xl py-4 font-medium text-sm"
               >
                 戻る
@@ -817,13 +864,14 @@ function KioskPage() {
             </div>
             <button
               onClick={() => punch("break_end")}
-              className="w-full bg-gradient-primary text-primary-foreground rounded-2xl py-6 font-bold text-lg flex items-center justify-center gap-3 active:scale-[0.98] transition shadow-lg"
+              disabled={!canPunch}
+              className="w-full bg-gradient-primary text-primary-foreground rounded-2xl py-6 font-bold text-lg flex items-center justify-center gap-3 active:scale-[0.98] transition shadow-lg disabled:opacity-35 disabled:shadow-none"
             >
               <Coffee size={24} />
               休憩終了
             </button>
             <button
-              onClick={() => { setSelectedStaff(null); setTodayLog(null); setHelpBadge(null); }}
+              onClick={resetToTop}
               className="w-full bg-secondary text-foreground rounded-2xl py-4 font-medium text-sm"
             >
               戻る
@@ -837,20 +885,22 @@ function KioskPage() {
             </div>
             <button
               onClick={() => punch("out")}
-              className="w-full bg-gradient-primary text-primary-foreground rounded-2xl py-6 font-bold text-lg flex items-center justify-center gap-3 active:scale-[0.98] transition shadow-lg"
+              disabled={!canPunch}
+              className="w-full bg-gradient-primary text-primary-foreground rounded-2xl py-6 font-bold text-lg flex items-center justify-center gap-3 active:scale-[0.98] transition shadow-lg disabled:opacity-35 disabled:shadow-none"
             >
               <LogOut size={24} />
               退勤する
             </button>
             <button
               onClick={() => punch("break_start")}
-              className="w-full bg-orange-400 text-white rounded-2xl py-6 font-bold text-lg flex items-center justify-center gap-3 active:scale-[0.98] transition shadow-lg"
+              disabled={!canPunch}
+              className="w-full bg-orange-400 text-white rounded-2xl py-6 font-bold text-lg flex items-center justify-center gap-3 active:scale-[0.98] transition shadow-lg disabled:opacity-35 disabled:shadow-none"
             >
               <Coffee size={24} />
               休憩開始
             </button>
             <button
-              onClick={() => { setSelectedStaff(null); setTodayLog(null); setHelpBadge(null); }}
+              onClick={resetToTop}
               className="w-full bg-secondary text-foreground rounded-2xl py-4 font-medium text-sm"
             >
               戻る
@@ -860,13 +910,14 @@ function KioskPage() {
           <>
             <button
               onClick={() => punch("in")}
-              className="w-full bg-gradient-primary text-primary-foreground rounded-2xl py-6 font-bold text-lg flex items-center justify-center gap-3 active:scale-[0.98] transition shadow-lg"
+              disabled={!canPunch}
+              className="w-full bg-gradient-primary text-primary-foreground rounded-2xl py-6 font-bold text-lg flex items-center justify-center gap-3 active:scale-[0.98] transition shadow-lg disabled:opacity-35 disabled:shadow-none"
             >
               <LogIn size={24} />
               出勤する
             </button>
             <button
-              onClick={() => { setSelectedStaff(null); setTodayLog(null); setHelpBadge(null); }}
+              onClick={resetToTop}
               className="w-full bg-secondary text-foreground rounded-2xl py-4 font-medium text-sm"
             >
               戻る
