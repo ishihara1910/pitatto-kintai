@@ -58,6 +58,13 @@ function useTimeout(onTimeout: () => void, ms: number) {
   }, [ms]);
 }
 
+/** 少しあとに実行する(画面を閉じたら取り消す。閉じたあとに打刻の画面を勝手に動かさないため) */
+function useLater() {
+  const ids = useRef<ReturnType<typeof setTimeout>[]>([]);
+  useEffect(() => () => { ids.current.forEach(clearTimeout); ids.current = []; }, []);
+  return useRef((fn: () => void, ms: number) => { ids.current.push(setTimeout(fn, ms)); }).current;
+}
+
 /* ─ 画面いっぱいのカメラ: 中央に顔を合わせる枠、上に「やめる」、下に案内 ─ */
 function FullScreenCamera({
   videoRef, state, title, onClose, frame, flash, children,
@@ -109,6 +116,8 @@ function FullScreenCamera({
 /** 本人の確認で、1回に送る枚数と、1枚ごとの間隔 */
 const VERIFY_FRAMES = 3;
 const VERIFY_FRAME_GAP_MS = 350;
+/** 撮っている途中で、これだけ顔が見えなければ、撮った分を捨てて最初からにする */
+const VERIFY_LOST_MS = 1500;
 
 /* ─ 打刻の前に、本人の顔か確認する(確認できない回数が3回で、店長の承認待ちとして進められる) ─ */
 export function FaceVerifyScreen({
@@ -131,6 +140,7 @@ export function FaceVerifyScreen({
   const failed = attempts >= MAX_ATTEMPTS || state === "error";
   const onSuccessRef = useRef(onSuccess);
   onSuccessRef.current = onSuccess;
+  const later = useLater();
   useTimeout(onTimeout, CAMERA_TIMEOUT_MS);
 
   useEffect(() => {
@@ -148,7 +158,12 @@ export function FaceVerifyScreen({
       busy = true;
       try {
         const f = await describeFace(v);
-        if (!isUsableFace(f) || stopped) return;
+        if (stopped) return;
+        if (!isUsableFace(f)) {
+          // 途中で顔が枠から外れたら、撮った分を捨てて「枠に顔を合わせてください」に戻す
+          if (frames.length > 0 && Date.now() - lastFrame > VERIFY_LOST_MS) { frames.length = 0; setChecking(false); }
+          return;
+        }
         lastFrame = Date.now();
         frames.push(f.descriptor);
         setChecking(true);
@@ -159,7 +174,7 @@ export function FaceVerifyScreen({
         setChecking(false);
         if (r.ok) {
           setOk(true);
-          setTimeout(() => onSuccessRef.current(), 900);   // 「確認しました」を見せてから戻る
+          later(() => onSuccessRef.current(), 900);   // 「確認しました」を見せてから戻る
           return;
         }
         setAttempts((a) => a + 1);
@@ -173,7 +188,7 @@ export function FaceVerifyScreen({
     };
     const id = setInterval(tick, 200);
     return () => { stopped = true; clearInterval(id); };
-  }, [state, attempts, staffId, videoRef]);
+  }, [state, attempts, staffId, videoRef, later]);
 
   return (
     <FullScreenCamera videoRef={videoRef} state={state} title={`${staffName}さん：顔認証`} onClose={onCancel} frame={ok ? "ok" : "idle"} flash={false}>
@@ -218,6 +233,7 @@ export function FaceEnrollScreen({
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const later = useLater();
 
   if (!agreed) {
     return <EnrollConsent staffName={staffName} onAgree={() => setAgreed(true)} onCancel={onCancel} onTimeout={onTimeout} />;
@@ -233,7 +249,7 @@ export function FaceEnrollScreen({
         await callFaceAuth({ action: "enroll", staff_id: staffId, descriptors, consent: true });
         setSaving(false);
         setDone(true);
-        setTimeout(onDone, 1200);   // 「登録が完了しました」を見せてから戻る
+        later(onDone, 1200);   // 「登録が完了しました」を見せてから戻る
       } catch {
         setError("登録できませんでした。もう一度、枠に顔を合わせてください");
         setSaving(false);
@@ -294,6 +310,7 @@ function EnrollCapture({
   const collected = useRef<number[][]>([]);
   const onCapturedRef = useRef(onCaptured);
   onCapturedRef.current = onCaptured;
+  const later = useLater();
   useTimeout(onTimeout, CAMERA_TIMEOUT_MS);
 
   useEffect(() => {
@@ -315,7 +332,7 @@ function EnrollCapture({
         collected.current.push(f.descriptor);
         setCount(collected.current.length);
         setFlash(true);
-        setTimeout(() => setFlash(false), 250);
+        later(() => setFlash(false), 250);
         if (collected.current.length >= needed) {
           stopped = true;
           onCapturedRef.current(collected.current.slice());
@@ -327,7 +344,7 @@ function EnrollCapture({
     const id = setInterval(tick, 300);
     return () => { stopped = true; clearInterval(id); };
     // error が変わったら(登録に失敗したら)、最初から撮り直す
-  }, [state, saving, done, needed, videoRef, error]);
+  }, [state, saving, done, needed, videoRef, error, later]);
 
   return (
     <FullScreenCamera videoRef={videoRef} state={state} title={`${staffName}さん：顔の登録`} onClose={onCancel} frame={done ? "ok" : "idle"} flash={flash}>

@@ -1,5 +1,5 @@
 ﻿import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useAuth } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { toast } from "sonner";
@@ -168,7 +168,8 @@ function KioskPage() {
   const activeStoreName = switchedToPair ? pairStore!.name : user?.storeName;
 
   /* ─ 顔認証(店舗の設定で「顔認証を使う」をONにした店舗だけ) ─ */
-  const [faceEnabled, setFaceEnabled] = useState(false);
+  // 店舗の顔認証の設定。null = 読み込み中(読み込み中は打刻させない)
+  const [faceEnabled, setFaceEnabled] = useState<boolean | null>(null);
   const [faceRegistered, setFaceRegistered] = useState<Set<string>>(new Set());
   // 選んだ従業員の顔認証の状態。ONの店舗では、ok か pending になるまで打刻のボタンを押せない
   //  checking=登録状況を確認中 / need-verify=顔認証が必要 / need-enroll=顔の登録が必要
@@ -178,7 +179,13 @@ function KioskPage() {
   const [faceScreen, setFaceScreen] = useState<"verify" | "enroll" | null>(null);
   const currentFace = faceEnabled && selectedStaff && faceStatus?.staffId === selectedStaff.id ? faceStatus.status : null;
   const facePending = currentFace === "pending";
-  const canPunch = !faceEnabled || currentFace === "ok" || currentFace === "pending";
+  // 打刻した直後の3秒の表示中は、もう一度押せないようにする
+  const [punchLocked, setPunchLocked] = useState(false);
+  const punchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // いま選んでいる従業員(顔の確認の結果が遅れて返ったとき、別の人の画面を上書きしないため)
+  const selectedIdRef = useRef<string | null>(null);
+  const [selectSeq, setSelectSeq] = useState(0);   // 同じ人を選び直したときも、顔の確認をやり直すため
+  const canPunch = !punchLocked && (faceEnabled === false || currentFace === "ok" || currentFace === "pending");
 
   useEffect(() => {
     if (user && user.role !== 'kiosk') {
@@ -259,8 +266,8 @@ function KioskPage() {
   }, [storeId]);
 
   useEffect(() => {
-    setFaceEnabled(false);
-    if (!storeId) return;
+    setFaceEnabled(null);
+    if (!storeId) { setFaceEnabled(false); return; }
     let cancelled = false;
     supabase.from("stores").select("face_auth_enabled").eq("id", storeId).maybeSingle()
       .then(({ data }) => { if (!cancelled) setFaceEnabled(!!(data as any)?.face_auth_enabled); });
@@ -311,6 +318,9 @@ function KioskPage() {
 
   // トップ画面に戻す(選んだ従業員・顔認証の状態をすべて解除する)
   const resetToTop = () => {
+    if (punchTimer.current) { clearTimeout(punchTimer.current); punchTimer.current = null; }
+    setPunchLocked(false);
+    selectedIdRef.current = null;
     setSelectedStaff(null);
     setTodayLog(null);
     setHelpBadge(null);
@@ -320,6 +330,11 @@ function KioskPage() {
 
   // 顔認証ONの店舗: 登録済みなら「顔認証をする」、未登録なら「顔を登録する」を出す
   const checkFaceStatus = async (staff: StaffMember) => {
+    // 結果が返ったときに、まだ同じ人を選んでいる場合だけ反映する
+    const apply = (status: "need-verify" | "need-enroll" | "pending") => {
+      if (selectedIdRef.current !== staff.id) return;
+      setFaceStatus((prev) => (prev?.staffId === staff.id ? { staffId: staff.id, status } : prev));
+    };
     setFaceStatus({ staffId: staff.id, status: "checking" });
     let registered = faceRegistered.has(staff.id);
     if (!registered) {
@@ -329,17 +344,29 @@ function KioskPage() {
         registered = r.registered.includes(staff.id);
       } catch {
         // 確認できないときは、既存の顔データを上書きしないよう登録には進まず、承認待ちとして打刻を進める
+        if (selectedIdRef.current !== staff.id) return;
         toast.info("顔認証を使えないため、店長の承認待ちとして打刻します");
-        setFaceStatus({ staffId: staff.id, status: "pending" });
+        apply("pending");
         return;
       }
     }
-    setFaceStatus({ staffId: staff.id, status: registered ? "need-verify" : "need-enroll" });
+    apply(registered ? "need-verify" : "need-enroll");
   };
 
+  // 顔認証ONの店舗で、人を選んだら確認を始める(店舗の設定を読み込む前に選んだ場合も、読み込み後に始める)
+  useEffect(() => {
+    if (faceEnabled && selectedStaff && faceStatus?.staffId !== selectedStaff.id) checkFaceStatus(selectedStaff);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [faceEnabled, selectedStaff?.id, selectSeq]);
+
   const selectStaff = async (staff: StaffMember, helpStoreName?: string) => {
+    // 前の人の打刻のあとの3秒のタイマーが、この人の画面を閉じないように取り消す
+    if (punchTimer.current) { clearTimeout(punchTimer.current); punchTimer.current = null; }
+    setPunchLocked(false);
+    selectedIdRef.current = staff.id;
     setFaceScreen(null);
-    if (faceEnabled) checkFaceStatus(staff); else setFaceStatus(null);
+    setFaceStatus(null);   // 顔認証ONなら、上の useEffect が確認を始める
+    setSelectSeq((n) => n + 1);
     setSelectedStaff(staff);
     setHelpBadge(helpStoreName ?? null);
     setShowStaffList(false);
@@ -440,7 +467,9 @@ function KioskPage() {
       toast.success(`${selectedStaff.name}さん ${row.clock_in} 出勤しました`);
       await flagFacePending(row.id);
       setTodayLog(row);
-      setTimeout(() => {
+      setPunchLocked(true);
+      punchTimer.current = setTimeout(() => {
+        punchTimer.current = null;
         resetToTop();
         loadStaffAndLogs();
       }, 3000);
@@ -465,7 +494,9 @@ function KioskPage() {
       toast.success(`${selectedStaff.name}さん ${row.break_start} 休憩開始`);
       await flagFacePending(row.id);
       setTodayLog(row);
-      setTimeout(() => {
+      setPunchLocked(true);
+      punchTimer.current = setTimeout(() => {
+        punchTimer.current = null;
         resetToTop();
         loadStaffAndLogs();
       }, 3000);
@@ -485,7 +516,9 @@ function KioskPage() {
       toast.success(`${selectedStaff.name}さん ${row.break_end} 休憩終了`);
       await flagFacePending(row.id);
       setTodayLog(row);
-      setTimeout(() => {
+      setPunchLocked(true);
+      punchTimer.current = setTimeout(() => {
+        punchTimer.current = null;
         resetToTop();
         loadStaffAndLogs();
       }, 3000);
@@ -517,7 +550,9 @@ function KioskPage() {
       toast.success(`${selectedStaff.name}さん ${row.clock_out} 退勤しました`);
       await flagFacePending(row.id);
       setTodayLog(row);
-      setTimeout(() => {
+      setPunchLocked(true);
+      punchTimer.current = setTimeout(() => {
+        punchTimer.current = null;
         resetToTop();
         loadStaffAndLogs();
       }, 3000);
@@ -539,7 +574,9 @@ function KioskPage() {
   }, [selectedStaff, currentFace, faceScreen]);
 
   // 打刻の画面の上に出す、顔認証の欄(顔認証ONの店舗だけ)
-  const facePanel = selectedStaff && !loading && currentFace ? (
+  const facePanel = selectedStaff && !loading && faceEnabled === null ? (
+    <div className="text-center py-4 text-muted-foreground text-sm">店舗の設定を確認しています…</div>
+  ) : selectedStaff && !loading && currentFace ? (
     currentFace === "ok" ? (
       <div className="bg-green-50 border border-green-300 rounded-2xl p-4 text-center">
         <p className="text-lg font-bold text-green-700">✅ 顔認証OK</p>
