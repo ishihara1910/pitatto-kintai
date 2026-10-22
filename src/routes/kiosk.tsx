@@ -34,6 +34,9 @@ interface HelpStore {
   name: string;
 }
 
+/** 出勤中とみなす長さ(出勤から18時間)。サーバーの record_punch と同じ */
+const OPEN_WINDOW_MS = 18 * 60 * 60 * 1000;
+
 interface AttendanceLog {
   id: string;
   store_id?: string;
@@ -144,6 +147,10 @@ function KioskPage() {
   const [selectedStaff, setSelectedStaff] = useState<StaffMember | null>(null);
   const [todayLog, setTodayLog] = useState<AttendanceLog | null>(null);
   const [loading, setLoading] = useState(false);
+  // 前回(18時間より前)の出勤のまま、退勤が記録されていない記録(店長に伝えてもらう)
+  const [staleOpen, setStaleOpen] = useState<{ date: string; clock_in: string } | null>(null);
+  // 打刻の状態を読み込めなかった(「出勤する」と誤って出さず、読み込み直してもらう)
+  const [loadFailed, setLoadFailed] = useState(false);
   const [showStaffList, setShowStaffList] = useState(false);
   const [reorderMode, setReorderMode] = useState(false);
   const [savingOrder, setSavingOrder] = useState(false);
@@ -246,6 +253,10 @@ function KioskPage() {
         supabase.from("attendance_logs").select("staff_id, clock_in, clock_out, break_start, break_end")
           .eq("store_id", storeId).eq("date", today).order("clock_in_recorded_at", { ascending: true }),
       ]);
+      // 朝5時をまたいで出勤中の人(前の営業日の出勤で、18時間以内)も「出勤中」と表示する
+      const { data: openLogs } = await supabase.from("attendance_logs").select("staff_id, clock_in, clock_out, break_start, break_end")
+        .eq("store_id", storeId).is("clock_out", null).lt("date", today)
+        .gt("clock_in_recorded_at", new Date(Date.now() - OPEN_WINDOW_MS).toISOString());
       setStaffList((members || []) as StaffMember[]);
       const logMap: Record<string, { clock_in: string; clock_out: string | null; break_start: string | null; break_end: string | null }> = {};
       for (const log of logs || []) {
@@ -254,6 +265,10 @@ function KioskPage() {
         // 同じ日に複数の勤務(ランチとディナー等)がある場合は、出勤中の記録を優先し、無ければ最新の記録を表示する
         if (prev && !prev.clock_out && log.clock_out) continue;
         logMap[log.staff_id] = { clock_in: log.clock_in, clock_out: log.clock_out, break_start: log.break_start, break_end: log.break_end };
+      }
+      for (const log of openLogs || []) {
+        if (!log.clock_in || (logMap[log.staff_id] && !logMap[log.staff_id].clock_out)) continue;
+        logMap[log.staff_id] = { clock_in: log.clock_in, clock_out: null, break_start: log.break_start, break_end: log.break_end };
       }
       setStaffTodayLogs(logMap);
     } catch {
@@ -373,19 +388,33 @@ function KioskPage() {
     setShowHelpStoreList(false);
     setShowHelpStaffList(false);
     setLoading(true);
+    setLoadFailed(false);
+    setStaleOpen(null);
+    setTodayLog(null);
     const today = toBusinessDateStr(new Date());
-    // 同じ日にランチ(ペア店舗)とディナーの2件がありうるため、複数行を取得して選ぶ。
-    // 出勤中の記録(どの店舗でも)を優先し、無ければ「いま打刻中の店舗」の最新の記録だけを対象にする
-    // （別店舗の退勤済みの記録が、この店舗での新しい出勤を妨げないようにするため）
-    const { data } = await supabase
-      .from("attendance_logs")
-      .select("id, store_id, clock_in, clock_out, actual_cost, break_start, break_end")
-      .eq("staff_id", staff.id)
-      .eq("date", today)
-      .order("clock_in", { ascending: true });
-    const rows = (data || []) as AttendanceLog[];
-    const open = rows.find((r) => r.clock_in && !r.clock_out);
-    const inActiveStore = rows.filter((r) => r.store_id === storeId);
+    const cols = "id, store_id, date, clock_in, clock_out, actual_cost, break_start, break_end, clock_in_recorded_at";
+    // 今日の記録(ランチとディナーの2件がありうる)と、出勤中のままの記録(どの店舗・どの日でも)を読む
+    const [todayRes, openRes] = await Promise.all([
+      supabase.from("attendance_logs").select(cols).eq("staff_id", staff.id).eq("date", today).order("clock_in", { ascending: true }),
+      supabase.from("attendance_logs").select(cols).eq("staff_id", staff.id).is("clock_out", null).not("clock_in", "is", null)
+        .order("clock_in_recorded_at", { ascending: false, nullsFirst: false }).limit(5),
+    ]);
+    if (selectedIdRef.current !== staff.id) return;   // 読み込み中に別の人を選んだ
+    if (todayRes.error || openRes.error) {
+      setLoadFailed(true);
+      setLoading(false);
+      return;
+    }
+    const rows = (todayRes.data || []) as (AttendanceLog & { clock_in_recorded_at?: string | null })[];
+    const opens = (openRes.data || []) as (AttendanceLog & { clock_in_recorded_at?: string | null })[];
+    const since = Date.now() - OPEN_WINDOW_MS;
+    const isRecent = (r: { clock_in_recorded_at?: string | null }) => !!r.clock_in_recorded_at && new Date(r.clock_in_recorded_at).getTime() > since;
+    // 出勤中: 18時間以内の出勤(朝5時をまたいだ前の営業日の出勤や、ヘルプ先の店舗の出勤も含む)。サーバーの退勤と同じ基準
+    const open = opens.find(isRecent);
+    // それより前の出勤のまま退勤がない記録は、退勤漏れとして知らせる(今日の出勤は、今までどおりできる)
+    const stale = opens.find((r) => !isRecent(r));
+    if (stale?.date && stale.clock_in) setStaleOpen({ date: stale.date, clock_in: stale.clock_in });
+    const inActiveStore = rows.filter((r) => r.store_id === storeId && r.clock_out);
     setTodayLog(open ?? inActiveStore[inActiveStore.length - 1] ?? null);
     setLoading(false);
   };
@@ -449,9 +478,22 @@ function KioskPage() {
     toast.error("店長への承認依頼を送れませんでした。店長に直接お知らせください");
   };
 
+  // 打刻中(サーバーの返事待ち)。押した瞬間に止めて、2回押しで出勤が2件できないようにする
+  const submittingRef = useRef(false);
   const punch = async (action: "in" | "out" | "break_start" | "break_end") => {
-    if (!selectedStaff || !user || !storeId) return;
-    if (!canPunch) return;   // 顔認証ONの店舗では、顔認証のあとに打刻する
+    if (!canPunch || submittingRef.current) return;   // 顔認証ONの店舗では、顔認証のあとに打刻する
+    submittingRef.current = true;
+    setPunchLocked(true);
+    try {
+      const ok = await doPunch(action);
+      if (!ok) setPunchLocked(false);   // 失敗・何もしなかったときは、もう一度押せるように戻す
+    } finally {
+      submittingRef.current = false;
+    }
+  };
+
+  const doPunch = async (action: "in" | "out" | "break_start" | "break_end"): Promise<boolean> => {
+    if (!selectedStaff || !user || !storeId) return false;
 
     if (action === "in") {
       const { data, error } = await supabase.rpc("record_punch", {
@@ -462,7 +504,7 @@ function KioskPage() {
         p_action: "in",
       });
 
-      if (error || !data) { console.error("出勤打刻 error:", error); toast.error(`出勤打刻に失敗しました: ${error?.message ?? ""}`); return; }
+      if (error || !data) { console.error("出勤打刻 error:", error); toast.error(`出勤打刻に失敗しました: ${error?.message ?? ""}`); return false; }
       const row = data as unknown as AttendanceLog;
       toast.success(`${selectedStaff.name}さん ${row.clock_in} 出勤しました`);
       await flagFacePending(row.id);
@@ -473,13 +515,14 @@ function KioskPage() {
         resetToTop();
         loadStaffAndLogs();
       }, 3000);
+      return true;
 
     } else if (action === "break_start") {
-      if (!todayLog) return;
+      if (!todayLog) return false;
       // 既に休憩記録がある場合は上書きしない（2回目以降の休憩は記録しない旨を通知）
       if (todayLog.break_start) {
         toast.info("本日の休憩は既に記録済みです");
-        return;
+        return false;
       }
       const { data, error } = await supabase.rpc("record_punch", {
         p_staff_id: selectedStaff.id,
@@ -489,7 +532,7 @@ function KioskPage() {
         p_action: "break_start",
       });
 
-      if (error || !data) { toast.error(`休憩打刻に失敗しました: ${error?.message ?? ""}`); return; }
+      if (error || !data) { toast.error(`休憩打刻に失敗しました: ${error?.message ?? ""}`); return false; }
       const row = data as unknown as AttendanceLog;
       toast.success(`${selectedStaff.name}さん ${row.break_start} 休憩開始`);
       await flagFacePending(row.id);
@@ -500,9 +543,10 @@ function KioskPage() {
         resetToTop();
         loadStaffAndLogs();
       }, 3000);
+      return true;
 
     } else if (action === "break_end") {
-      if (!todayLog) return;
+      if (!todayLog) return false;
       const { data, error } = await supabase.rpc("record_punch", {
         p_staff_id: selectedStaff.id,
         p_staff_name: selectedStaff.name,
@@ -511,7 +555,7 @@ function KioskPage() {
         p_action: "break_end",
       });
 
-      if (error || !data) { toast.error(`休憩終了打刻に失敗しました: ${error?.message ?? ""}`); return; }
+      if (error || !data) { toast.error(`休憩終了打刻に失敗しました: ${error?.message ?? ""}`); return false; }
       const row = data as unknown as AttendanceLog;
       toast.success(`${selectedStaff.name}さん ${row.break_end} 休憩終了`);
       await flagFacePending(row.id);
@@ -522,9 +566,10 @@ function KioskPage() {
         resetToTop();
         loadStaffAndLogs();
       }, 3000);
+      return true;
 
     } else {
-      if (!todayLog) return;
+      if (!todayLog) return false;
       const { data, error } = await supabase.rpc("record_punch", {
         p_staff_id: selectedStaff.id,
         p_staff_name: selectedStaff.name,
@@ -533,7 +578,7 @@ function KioskPage() {
         p_action: "out",
       });
 
-      if (error || !data) { console.error("退勤打刻 error:", error); toast.error(`退勤打刻に失敗しました: ${error?.message ?? ""}`); return; }
+      if (error || !data) { console.error("退勤打刻 error:", error); toast.error(`退勤打刻に失敗しました: ${error?.message ?? ""}`); return false; }
       const row = data as unknown as AttendanceLog;
       if (row.clock_in && row.clock_out && row.date) {
         const sunday = sundayOfWeek(row.date);
@@ -545,7 +590,9 @@ function KioskPage() {
           .filter((r: any) => !r.is_legal_holiday && r.clock_in && r.clock_out)
           .reduce((sum: number, r: any) => sum + dailyNormalMinutes(r.clock_in, r.clock_out, r.break_start, r.break_end), 0);
         const cost = calcCost(row.clock_in, row.clock_out, selectedStaff.hourly_rate, row.break_start, row.break_end, priorWeeklyMins, selectedStaff.wage_type, selectedStaff.daily_rate);
-        await supabase.from("attendance_logs").update({ actual_cost: cost }).eq("id", row.id);
+        // ヘルプ先のキオスクからの退勤でも書けるように、サーバーの関数で書き込む
+        const { error: costErr } = await supabase.rpc("set_attendance_cost", { p_log_id: row.id, p_cost: cost });
+        if (costErr) console.error("set_attendance_cost error:", costErr);
       }
       toast.success(`${selectedStaff.name}さん ${row.clock_out} 退勤しました`);
       await flagFacePending(row.id);
@@ -556,7 +603,9 @@ function KioskPage() {
         resetToTop();
         loadStaffAndLogs();
       }, 3000);
+      return true;
     }
+    return false;
   };
 
   const time = now.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -831,6 +880,12 @@ function KioskPage() {
 
       <div className="max-w-md mx-auto w-full px-6 mt-6 space-y-3 flex-1">
         {facePanel}
+        {selectedStaff && !loading && staleOpen && (
+          <div className="rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            <p className="font-bold">前回の退勤が記録されていません</p>
+            <p className="text-xs mt-1">{staleOpen.date.slice(5).replace("-", "/")} {staleOpen.clock_in} の出勤のあと、退勤が記録されていません。店長に伝えてください（店長はシフトボードから退勤の時刻を入力できます）。</p>
+          </div>
+        )}
         {!selectedStaff ? (
           <>
             <p className="text-center text-muted-foreground text-sm mb-2">
@@ -863,6 +918,13 @@ function KioskPage() {
           </>
         ) : loading ? (
           <div className="text-center py-8 text-muted-foreground">読み込み中...</div>
+        ) : loadFailed ? (
+          <div className="text-center py-6 space-y-3">
+            <p className="text-sm text-destructive font-bold">打刻の状態を読み込めませんでした</p>
+            <p className="text-xs text-muted-foreground">通信の状態を確かめて、もう一度読み込んでください。</p>
+            <button onClick={() => selectStaff(selectedStaff, helpBadge ?? undefined)}
+              className="w-full bg-gradient-primary text-primary-foreground rounded-2xl py-4 font-bold">もう一度読み込む</button>
+          </div>
         ) : isDone ? (
           <div className="text-center">
             <div className="bg-muted rounded-2xl py-8 px-4 mb-4">
